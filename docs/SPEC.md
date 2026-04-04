@@ -186,21 +186,3 @@ fastdtw==0.3.4
 python-dotenv==1.0.1
 pytest==8.3.3
 ```
-
----
-
-## How to use this spec with Claude Code
-
-Start every Claude Code session with:
-> "Read SPEC.md first, then implement [module name]."
-
-Suggested order:
-1. Scaffold folder structure (empty files + docstrings)
-2. `ml/extractor.py`
-3. `ml/smoother.py` and `ml/normaliser.py`
-4. `ml/calculator.py`
-5. `ml/scorer.py`
-6. `ml/renderer.py`
-7. `backend/llm.py`
-8. `backend/pipeline.py` + routes
-9. Tests
