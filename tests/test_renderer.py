@@ -13,7 +13,7 @@ from ml.scorer import score_deviations
 from ml.renderer import render_video
 
 def test_render():
-    video_path = "data/samples/expert_clear.mp4"
+    video_path = "data/samples/clear.mp4"
 
     if not os.path.exists(video_path):
         print(f"Video not found: {video_path}")

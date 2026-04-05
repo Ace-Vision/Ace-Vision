@@ -11,7 +11,7 @@ Drawing order per frame:
    - Amber  #FF9800 — severity 0.3–0.6
    - Red    #F44336 — severity > 0.6
 3. Small angle arc at each joint (radius 30px, matching colour)
-4. HUD top-right: top 3 deviations with joint name + degrees off
+4. HUD top-left: All 9 deviations with direction (高いです/低いです)
 
 Key responsibilities:
 - Accept original video frames, keypoints, and deviation scores
@@ -23,7 +23,6 @@ Key responsibilities:
 """
 
 import cv2
-import json
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision
@@ -74,8 +73,6 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     if not out.isOpened():
         raise ValueError(f"Could not create output video: {output_path}")
-    if not out.isOpened():
-        raise ValueError(f"Could not create output video: {output_path}")
 
     # Joint to landmark mapping
     joint_landmarks = {
@@ -89,13 +86,6 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
         'hip_shoulder_separation': 'left_shoulder',  # Approximate
         'wrist_extension': 'right_wrist'
     }
-
-    # Load baselines if needed for HUD
-    baselines = None
-    if deviation_scores and 'deviations' in deviation_scores:
-        baselines_path = "data/reference/expert_baselines.json"
-        with open(baselines_path, 'r') as f:
-            baselines = json.load(f)
 
     frame_num = 0
     while cap.isOpened():
@@ -139,20 +129,15 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
                         cv2.circle(frame, (x, y), 10, color, -1)
 
         # Draw HUD
-        if deviation_scores and 'deviations' in deviation_scores and baselines:
+        if deviation_scores and 'deviations' in deviation_scores:
             deviations = deviation_scores['deviations']
-            sorted_devs = sorted(deviations.items(), key=lambda x: x[1]['severity_score'], reverse=True)[:3]
             y_offset = 30
-            for i, (joint, data) in enumerate(sorted_devs):
-                expert_angle = baselines[joint]['mean']
-                player_angle = data['angle']
+            green_color = (0, 255, 0)  # BGR format
+            for i, (joint, data) in enumerate(deviations.items()):
                 deviation = data['deviation_deg']
-                text1 = f"{joint} - expertの角度: {expert_angle:.1f}"
-                text2 = f"{joint} - あなたの角度: {player_angle:.1f}"
-                text3 = f"{joint} - deviation: {deviation:.1f}"
-                cv2.putText(frame, text1, (10, y_offset + i * 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(frame, text2, (10, y_offset + i * 90 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(frame, text3, (10, y_offset + i * 90 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                direction = "higher than expert" if data['direction'] == "too_high" else "lower than expert"
+                text = f"{joint}: {deviation:.1f}deg {direction}"
+                cv2.putText(frame, text, (10, y_offset + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, green_color, 2)
 
         out.write(frame)
         frame_num += 1
