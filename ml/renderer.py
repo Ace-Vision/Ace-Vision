@@ -23,6 +23,7 @@ Key responsibilities:
 """
 
 import cv2
+import json
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision
@@ -46,12 +47,12 @@ index_to_name = {i: name for i, name in enumerate(landmark_names)}
 
 def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None) -> str:
     """
-    Render video with pose skeleton overlay.
+    Render video with pose skeleton overlay and deviation feedback.
 
     Args:
         video_path (str): Path to the input video.
         keypoints_list (list[dict]): List of keypoints per frame.
-        deviation_scores (dict, optional): Deviation scores for joints. Defaults to None.
+        deviation_scores (dict, optional): Deviation scores from scorer. Defaults to None.
 
     Returns:
         str: Path to the output video.
@@ -68,9 +69,33 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Output video
-    output_path = video_path.replace('.mp4', '_overlay.mp4')
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    output_path = video_path.replace('.mp4', '_overlay.avi')
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    if not out.isOpened():
+        raise ValueError(f"Could not create output video: {output_path}")
+    if not out.isOpened():
+        raise ValueError(f"Could not create output video: {output_path}")
+
+    # Joint to landmark mapping
+    joint_landmarks = {
+        'right_elbow_flexion': 'right_elbow',
+        'left_elbow_flexion': 'left_elbow',
+        'right_shoulder_abduction': 'right_shoulder',
+        'left_shoulder_abduction': 'left_shoulder',
+        'right_knee_flexion': 'right_knee',
+        'left_knee_flexion': 'left_knee',
+        'trunk_lateral_tilt': 'nose',  # Approximate
+        'hip_shoulder_separation': 'left_shoulder',  # Approximate
+        'wrist_extension': 'right_wrist'
+    }
+
+    # Load baselines if needed for HUD
+    baselines = None
+    if deviation_scores and 'deviations' in deviation_scores:
+        baselines_path = "data/reference/expert_baselines.json"
+        with open(baselines_path, 'r') as f:
+            baselines = json.load(f)
 
     frame_num = 0
     while cap.isOpened():
@@ -95,6 +120,39 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
             for landmark_name, data in kp.items():
                 x, y = int(data['x'] * width), int(data['y'] * height)
                 cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)  # Green dots
+
+        # Draw deviation overlays
+        if deviation_scores and 'deviations' in deviation_scores:
+            deviations = deviation_scores['deviations']
+            for joint, data in deviations.items():
+                if joint in joint_landmarks:
+                    landmark = joint_landmarks[joint]
+                    if landmark in kp:
+                        x, y = int(kp[landmark]['x'] * width), int(kp[landmark]['y'] * height)
+                        severity = data['severity_score']
+                        if severity < 0.3:
+                            color = (76, 175, 80)  # Green
+                        elif severity < 0.6:
+                            color = (255, 152, 0)  # Amber
+                        else:
+                            color = (244, 67, 54)  # Red
+                        cv2.circle(frame, (x, y), 10, color, -1)
+
+        # Draw HUD
+        if deviation_scores and 'deviations' in deviation_scores and baselines:
+            deviations = deviation_scores['deviations']
+            sorted_devs = sorted(deviations.items(), key=lambda x: x[1]['severity_score'], reverse=True)[:3]
+            y_offset = 30
+            for i, (joint, data) in enumerate(sorted_devs):
+                expert_angle = baselines[joint]['mean']
+                player_angle = data['angle']
+                deviation = data['deviation_deg']
+                text1 = f"{joint} - expertの角度: {expert_angle:.1f}"
+                text2 = f"{joint} - あなたの角度: {player_angle:.1f}"
+                text3 = f"{joint} - deviation: {deviation:.1f}"
+                cv2.putText(frame, text1, (10, y_offset + i * 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, text2, (10, y_offset + i * 90 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, text3, (10, y_offset + i * 90 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         out.write(frame)
         frame_num += 1

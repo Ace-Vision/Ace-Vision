@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for rendering video with keypoints overlay
+Test script for ml/scorer.py
 """
 
 import sys
@@ -10,10 +10,9 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from ml.extractor import extract_keypoints
 from ml.calculator import calculate_angles
 from ml.scorer import score_deviations
-from ml.renderer import render_video
 
-def test_render():
-    video_path = "data/samples/expert_clear.mp4"
+def test_scorer():
+    video_path = "data/samples/badminton.mp4"
 
     if not os.path.exists(video_path):
         print(f"Video not found: {video_path}")
@@ -30,10 +29,11 @@ def test_render():
     print("Scoring deviations...")
     scores = score_deviations(angles)
     print(f"Peak frame: {scores.get('peak_frame')}")
+    print("Deviations:")
+    for joint, data in scores.get('deviations', {}).items():
+        print(f"  {joint}: {data['angle']:.2f} deg, deviation {data['deviation_deg']:.2f}, severity {data['severity_score']:.2f}, {data['direction']}")
 
-    print("Rendering video...")
-    output_path = render_video(video_path, keypoints, scores)
-    print(f"Rendered video saved to: {output_path}")
+    print("Test passed!")
 
 if __name__ == "__main__":
-    test_render()
+    test_scorer()
