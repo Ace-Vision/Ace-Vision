@@ -171,36 +171,23 @@ REFERENCE_BASELINES_PATH=./data/reference/expert_baselines.json
 ## Dependencies
 
 ```
-mediapipe==0.10.14
-opencv-python==4.10.0.84
-numpy==1.26.4
-scipy==1.13.1
-fastapi==0.115.0
-uvicorn==0.30.6
-python-multipart==0.0.9
-sqlalchemy==2.0.35
-psycopg2-binary==2.9.9
-pydantic==2.8.2
-anthropic==0.34.2
-fastdtw==0.3.4
-python-dotenv==1.0.1
-pytest==8.3.3
+absl-py==2.4.0
+cffi==2.0.0
+contourpy==1.3.3
+cycler==0.12.1
+flatbuffers==25.12.19
+fonttools==4.62.1
+kiwisolver==1.5.0
+matplotlib==3.10.8
+mediapipe==0.10.33
+numpy==2.4.4
+opencv-contrib-python==4.13.0.92
+opencv-python==4.13.0.92
+packaging==26.0
+pillow==12.2.0
+pycparser==3.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+six==1.17.0
+sounddevice==0.5.5
 ```
-
----
-
-## How to use this spec with Claude Code
-
-Start every Claude Code session with:
-> "Read SPEC.md first, then implement [module name]."
-
-Suggested order:
-1. Scaffold folder structure (empty files + docstrings)
-2. `ml/extractor.py`
-3. `ml/smoother.py` and `ml/normaliser.py`
-4. `ml/calculator.py`
-5. `ml/scorer.py`
-6. `ml/renderer.py`
-7. `backend/llm.py`
-8. `backend/pipeline.py` + routes
-9. Tests
