@@ -8,37 +8,25 @@ Endpoints:
                    return overlay video path + deviation scores + session_id.
 
 Key responsibilities:
-- Initialise FastAPI app with CORS (so the frontend can talk to it)
-- Serve the frontend HTML file
+- Initialise FastAPI app with CORS (so the Streamlit frontend can talk to it)
 - Define the /analyse route using Pydantic schemas
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from backend.schemas import AnalyseRequest, AnalyseResponse
 from backend import pipeline
 
 app = FastAPI(title="Ace Vision API")
 
-# Allow the frontend (running on any origin during development) to call the API
+# Allow the Streamlit frontend (running on a different port) to call the API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Serve the frontend folder so you can open the UI at http://localhost:8000/
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
-
-
-@app.get("/")
-def serve_frontend():
-    """Serve the main frontend HTML page."""
-    return FileResponse("frontend/index.html")
 
 
 @app.post("/analyse", response_model=AnalyseResponse)
