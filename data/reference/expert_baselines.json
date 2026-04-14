@@ -1,0 +1,6 @@
+{
+  "right_elbow_flexion":      { "mean": 118, "std": 8  },
+  "right_shoulder_abduction": { "mean": 90,  "std": 10 },
+  "trunk_lateral_tilt":       { "mean": 15,  "std": 5  },
+  "left_knee_flexion":        { "mean": 45,  "std": 8  }
+}
