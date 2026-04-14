@@ -24,19 +24,30 @@ Key responsibilities:
 import json
 import os
 
+# Maps each sport to the correct baseline file.
+# Add new sports here as they get added to the app.
+BASELINES_MAP = {
+    "tennis_serve": "data/reference/expert_baselines.json",
+    "badminton": "data/reference/badminton_baselines.json",
+}
 
-def score_deviations(angles_list: list[dict]) -> dict:
+
+def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") -> dict:
     """
-    Score deviations from expert baselines.
+    Score deviations from expert baselines for a given sport.
 
     Args:
         angles_list (list[dict]): List of angles per frame.
+        sport_type (str): Which sport's baselines to use ("tennis_serve" or "badminton").
 
     Returns:
         dict: Deviation scores and other metrics.
     """
-    # Load expert baselines
-    baselines_path = "data/reference/expert_baselines.json"
+    if sport_type not in BASELINES_MAP:
+        raise ValueError(f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}")
+
+    # Load the correct baselines for the chosen sport
+    baselines_path = BASELINES_MAP[sport_type]
     with open(baselines_path, 'r') as f:
         baselines = json.load(f)
 
