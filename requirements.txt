@@ -8,12 +8,16 @@ kiwisolver==1.5.0
 matplotlib==3.10.8
 mediapipe==0.10.33
 numpy==2.4.4
+ollama>=0.4.0
 opencv-contrib-python==4.13.0.92
 opencv-python==4.13.0.92
 packaging==26.0
 pillow==12.2.0
 pycparser==3.0
 pyparsing==3.3.2
+PyPDF2>=3.0.0
 python-dateutil==2.9.0.post0
+requests>=2.25.0
+sentence-transformers>=2.2.0
 six==1.17.0
 sounddevice==0.5.5
