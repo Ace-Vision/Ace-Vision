@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
 function Record() {
   const navigate = useNavigate();
   const [sport, setSport] = useState('badminton');
   const [skill, setSkill] = useState('intermediate');
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   function handleFile(e) {
     const f = e.target.files[0];
@@ -16,10 +19,31 @@ function Record() {
   async function handleAnalyse() {
     if (!file) return;
     setLoading(true);
-    // TODO: POST /analyse with file + skill_level
-    await new Promise(r => setTimeout(r, 1500)); // mock delay
-    setLoading(false);
-    navigate('/result');
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('sport_type', sport);
+      formData.append('skill_level', skill);
+
+      const res = await fetch(`${API_BASE}/analyse`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `Server error ${res.status}`);
+      }
+
+      const result = await res.json();
+      navigate('/result', { state: { result, sport, skill } });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -37,7 +61,7 @@ function Record() {
         <div>
           <p className="text-sm font-medium text-gray-700 mb-2">Choose sport</p>
           <div className="flex gap-3">
-            {[['badminton', '🏸 Badminton'], ['tennis', '🎾 Tennis']].map(([val, label]) => (
+            {[['badminton', '🏸 Badminton'], ['tennis_serve', '🎾 Tennis']].map(([val, label]) => (
               <button
                 key={val}
                 onClick={() => setSport(val)}
@@ -95,6 +119,13 @@ function Record() {
             <input type="file" accept="video/mp4,video/quicktime" className="hidden" onChange={handleFile} />
           </label>
         </div>
+
+        {/* Error */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        )}
 
         {/* Analyse button */}
         <button

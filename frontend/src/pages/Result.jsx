@@ -1,33 +1,10 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
-// Mock data — replace with real API response later
-const mockResult = {
-  sport: 'Badminton',
-  stroke: 'Backhand Drive',
-  score: 73,
-  deviations: [
-    { joint: 'Right Elbow Flexion',      angle: 102, deviation: 16, direction: 'too low',  severity: 0.7 },
-    { joint: 'Wrist Extension',          angle: 28,  deviation: 12, direction: 'too low',  severity: 0.55 },
-    { joint: 'Trunk Lateral Tilt',       angle: 18,  deviation: 3,  direction: 'too high', severity: 0.2 },
-    { joint: 'Right Shoulder Abduction', angle: 88,  deviation: 2,  direction: 'too low',  severity: 0.1 },
-  ],
-  coaching: {
-    corrections: [
-      {
-        joint: 'Right Elbow Flexion',
-        deviation_deg: 16,
-        impact: 'Reduces power transfer and increases injury risk at contact.',
-        drill: 'Shadow swing with elbow at 118° — hold a foam roller under your arm to keep angle consistent.',
-      },
-      {
-        joint: 'Wrist Extension',
-        deviation_deg: 12,
-        impact: 'Late wrist snap causes loss of shuttle speed and direction control.',
-        drill: 'Wrist flick drill — flick a shuttlecock against a wall 20 reps focusing on contact point.',
-      },
-    ],
-    summary: 'Good base form. Primary issue is elbow angle at contact — fixing this will noticeably improve power and consistency.',
-  },
+// Fallback shown when navigating directly to /result without data (dev only)
+const FALLBACK = {
+  overall_score: 0,
+  sport_type: 'unknown',
+  deviation_scores: { deviations: {} },
 };
 
 function severityClass(s) {
@@ -48,9 +25,19 @@ function severityLabel(s) {
   return 'Needs work';
 }
 
+function formatJointName(key) {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function Result() {
   const navigate = useNavigate();
-  const { sport, stroke, score, deviations, coaching } = mockResult;
+  const { state } = useLocation();
+
+  const result = state?.result ?? FALLBACK;
+  const { overall_score, sport_type, deviation_scores } = result;
+  const deviations = deviation_scores?.deviations ?? {};
+
+  const sportLabel = sport_type === 'tennis_serve' ? 'Tennis' : 'Badminton';
 
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
@@ -59,8 +46,8 @@ function Result() {
       <div className="bg-white px-6 pt-14 pb-4 border-b border-gray-100 flex items-center gap-3">
         <button onClick={() => navigate(-1)} className="text-gray-400 text-xl">‹</button>
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{stroke}</h1>
-          <p className="text-sm text-gray-400">{sport}</p>
+          <h1 className="text-xl font-semibold text-gray-900">Analysis Result</h1>
+          <p className="text-sm text-gray-400">{sportLabel}</p>
         </div>
       </div>
 
@@ -70,59 +57,38 @@ function Result() {
         <div className="bg-purple-700 rounded-2xl p-5 flex items-center justify-between">
           <div>
             <p className="text-purple-200 text-sm">Overall Score</p>
-            <p className="text-white text-5xl font-bold mt-1">{score}</p>
+            <p className="text-white text-5xl font-bold mt-1">{overall_score}</p>
             <p className="text-purple-300 text-xs mt-1">out of 100</p>
           </div>
           <div className="w-20 h-20 rounded-full border-4 border-purple-400 flex items-center justify-center">
-            <span className="text-white text-2xl font-bold">{score}</span>
+            <span className="text-white text-2xl font-bold">{overall_score}</span>
           </div>
         </div>
 
         {/* Joint breakdown */}
         <div>
           <h2 className="text-sm font-semibold text-gray-900 mb-3">Joint Analysis</h2>
-          <div className="space-y-2">
-            {deviations.map(d => (
-              <div key={d.joint} className={`bg-white rounded-xl p-4 border-l-4 ${severityClass(d.severity)} shadow-sm`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">{d.joint}</span>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${severityBadge(d.severity)}`}>
-                    {severityLabel(d.severity)}
-                  </span>
+          {Object.keys(deviations).length === 0 ? (
+            <p className="text-sm text-gray-400">No joint data available.</p>
+          ) : (
+            <div className="space-y-2">
+              {Object.entries(deviations).map(([joint, d]) => (
+                <div key={joint} className={`bg-white rounded-xl p-4 border-l-4 ${severityClass(d.severity_score)} shadow-sm`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-900">{formatJointName(joint)}</span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${severityBadge(d.severity_score)}`}>
+                      {severityLabel(d.severity_score)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {d.angle?.toFixed(1)}° &nbsp;·&nbsp; {d.deviation_deg?.toFixed(1)}° off &nbsp;·&nbsp; {d.direction?.replace('_', ' ')}
+                  </p>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  {d.angle}° &nbsp;·&nbsp; {d.deviation}° off &nbsp;·&nbsp; {d.direction}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* AI Coaching */}
-        <div>
-          <h2 className="text-sm font-semibold text-gray-900 mb-3">AI Coaching</h2>
-
-          <div className="bg-white rounded-xl p-4 border border-gray-100 mb-3">
-            <p className="text-xs text-gray-500 italic">{coaching.summary}</p>
-          </div>
-
-          {coaching.corrections.map((c, i) => (
-            <div key={i} className="bg-white rounded-xl p-4 border border-gray-100 mb-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold shrink-0">
-                  {i + 1}
-                </span>
-                <span className="text-sm font-medium text-gray-900">{c.joint}</span>
-                <span className="text-xs text-red-500 ml-auto">{c.deviation_deg}° off</span>
-              </div>
-              <p className="text-xs text-gray-600 mb-2">{c.impact}</p>
-              <div className="bg-purple-50 rounded-lg p-3">
-                <p className="text-xs font-medium text-purple-700 mb-1">Drill</p>
-                <p className="text-xs text-purple-600">{c.drill}</p>
-              </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
+
 
       </div>
     </div>

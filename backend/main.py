@@ -1,26 +1,23 @@
 """
 backend/main.py — FastAPI entry point.
 
-Creates the FastAPI application instance and registers route handlers.
-
 Endpoints:
-- POST /analyse  — Pick a sport, run the full ML pipeline on the sample video,
-                   return overlay video path + deviation scores + session_id.
-
-Key responsibilities:
-- Initialise FastAPI app with CORS (so the Streamlit frontend can talk to it)
-- Define the /analyse route using Pydantic schemas
+- POST /analyse  — Upload a video file, run the full ML pipeline,
+                   return deviation scores + overall score + session_id.
 """
 
-from fastapi import FastAPI
+import os
+import shutil
+import tempfile
+
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.schemas import AnalyseRequest, AnalyseResponse
+from backend.schemas import AnalyseResponse
 from backend import pipeline
 
 app = FastAPI(title="Ace Vision API")
 
-# Allow the Streamlit frontend (running on a different port) to call the API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,15 +27,29 @@ app.add_middleware(
 
 
 @app.post("/analyse", response_model=AnalyseResponse)
-def analyse(request: AnalyseRequest):
-    """
-    Run the ML pipeline on the sample video for the chosen sport.
+async def analyse(
+    file: UploadFile = File(...),
+    sport_type: str = Form(...),
+    skill_level: str = Form(...),
+):
+    valid_sports = ("badminton", "tennis_serve")
+    if sport_type not in valid_sports:
+        raise HTTPException(status_code=422, detail=f"sport_type must be one of {valid_sports}")
 
-    The frontend sends:
-      - sport_type:  "badminton" or "tennis_serve"
-      - skill_level: "beginner", "intermediate", or "advanced"
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
 
-    Returns deviation scores and the path to the rendered overlay video.
-    """
-    result = pipeline.run_pipeline(request.sport_type, request.skill_level)
-    return AnalyseResponse(**result)
+    try:
+        result = pipeline.run_pipeline(tmp_path, sport_type)
+    finally:
+        os.unlink(tmp_path)
+
+    return AnalyseResponse(
+        session_id=result["session_id"],
+        deviation_scores=result["deviation_scores"],
+        overlay_path=result["overlay_path"],
+        sport_type=sport_type,
+        overall_score=result["overall_score"],
+    )
