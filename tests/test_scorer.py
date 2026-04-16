@@ -12,7 +12,7 @@ from ml.calculator import calculate_angles
 from ml.scorer import score_deviations
 
 def test_scorer():
-    video_path = "data/samples/badminton.mp4"
+    video_path = "data/samples/user_clear.mp4"
 
     if not os.path.exists(video_path):
         print(f"Video not found: {video_path}")
