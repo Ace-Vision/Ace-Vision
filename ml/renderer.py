@@ -67,12 +67,23 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Output video
-    output_path = video_path.replace('.mp4', '_overlay.avi')
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    if not out.isOpened():
-        raise ValueError(f"Could not create output video: {output_path}")
+    # Output video: enforce H.264 in MP4 for browser/Streamlit compatibility.
+    output_path = video_path.replace('.mp4', '_overlay.mp4')
+    preferred_codecs = ["avc1", "H264", "X264"]
+    out = None
+    for codec in preferred_codecs:
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        candidate = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if candidate.isOpened():
+            out = candidate
+            break
+        candidate.release()
+
+    if out is None:
+        raise ValueError(
+            "Could not create H.264 output video. "
+            "No H.264 encoder (avc1/H264/X264) is available in this OpenCV build."
+        )
 
     # Joint to landmark mapping
     joint_landmarks = {
