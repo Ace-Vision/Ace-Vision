@@ -24,10 +24,9 @@ Key responsibilities:
 import json
 import os
 
-# Maps each sport to the correct baseline file.
-# Add new sports here as they get added to the app.
+# Maps each sport to its own baseline file.
 BASELINES_MAP = {
-    "tennis_serve": "data/reference/expert_baselines.json",
+    "tennis_serve": "data/reference/tennis_baselines.json",
     "badminton": "data/reference/badminton_baselines.json",
 }
 
@@ -46,9 +45,17 @@ def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") 
     if sport_type not in BASELINES_MAP:
         raise ValueError(f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}")
 
-    # Load the correct baselines for the chosen sport
-    baselines_path = BASELINES_MAP[sport_type]
-    with open(baselines_path, 'r') as f:
+    # Load the sport-specific baselines only.
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    baselines_path = os.path.join(repo_root, BASELINES_MAP[sport_type])
+
+    if not os.path.exists(baselines_path):
+        raise FileNotFoundError(
+            f"Baseline file not found for '{sport_type}'. "
+            f"Expected: '{baselines_path}'."
+        )
+
+    with open(baselines_path, "r") as f:
         baselines = json.load(f)
 
     # Find peak frame (simplified: use the frame with max right_elbow_flexion or first valid)
@@ -87,7 +94,8 @@ def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") 
     result = {
         "peak_frame": peak_frame,
         "deviations": deviations,
-        "hip_leads_shoulder": hip_leads_shoulder
+        "hip_leads_shoulder": hip_leads_shoulder,
+        "baseline_source": os.path.relpath(baselines_path, repo_root),
     }
 
     return result

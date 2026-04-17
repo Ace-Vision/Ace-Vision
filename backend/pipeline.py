@@ -54,8 +54,9 @@ def run_pipeline(sport_type: str, skill_level: str) -> dict:
     # Step 4: Score the player's angles against the expert baselines for this sport
     deviation_scores = scorer.score_deviations(angles_list, sport_type)
 
-    # Step 5: Render the overlay video with colour-coded skeleton
-    overlay_path = renderer.render_video(video_path, keypoints_list, deviation_scores)
+    # Step 5: Render the overlay video with colour-coded skeleton.
+    # Pass angles_list so the renderer can show live per-frame values in the HUD.
+    overlay_path = renderer.render_video(video_path, keypoints_list, deviation_scores, angles_list)
 
     # Give this analysis run a unique ID so results can be fetched later
     session_id = str(uuid.uuid4())

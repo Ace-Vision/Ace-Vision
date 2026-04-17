@@ -44,7 +44,7 @@ landmark_names = [landmark.name.lower() for landmark in vision.PoseLandmark]
 index_to_name = {i: name for i, name in enumerate(landmark_names)}
 
 
-def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None) -> str:
+def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None) -> str:
     """
     Render video with pose skeleton overlay and deviation feedback.
 
@@ -122,33 +122,57 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
                 x, y = int(data['x'] * width), int(data['y'] * height)
                 cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)  # Green dots
 
-        # Draw deviation overlays
-        if deviation_scores and 'deviations' in deviation_scores:
-            deviations = deviation_scores['deviations']
-            for joint, data in deviations.items():
-                if joint in joint_landmarks:
-                    landmark = joint_landmarks[joint]
-                    if landmark in kp:
-                        x, y = int(kp[landmark]['x'] * width), int(kp[landmark]['y'] * height)
-                        severity = data['severity_score']
-                        if severity < 0.3:
-                            color = (76, 175, 80)  # Green
-                        elif severity < 0.6:
-                            color = (255, 152, 0)  # Amber
-                        else:
-                            color = (244, 67, 54)  # Red
-                        cv2.circle(frame, (x, y), 10, color, -1)
+        # Build per-frame deviations.
+        # If we have live angles for this frame, compute severity on the fly.
+        # Fall back to the peak-frame deviation_scores if angles aren't available.
+        frame_angles = angles_list[frame_num] if (angles_list and frame_num < len(angles_list)) else {}
+        peak_deviations = deviation_scores.get('deviations', {}) if deviation_scores else {}
 
-        # Draw HUD
-        if deviation_scores and 'deviations' in deviation_scores:
-            deviations = deviation_scores['deviations']
-            y_offset = 30
-            green_color = (0, 255, 0)  # BGR format
-            for i, (joint, data) in enumerate(deviations.items()):
-                deviation = data['deviation_deg']
-                direction = "higher than expert" if data['direction'] == "too_high" else "lower than expert"
-                text = f"{joint}: {deviation:.1f}deg {direction}"
-                cv2.putText(frame, text, (10, y_offset + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, green_color, 2)
+        # For each joint, pick severity from live angles (using peak severity as reference scale)
+        # or fall back to the static peak value.
+        def get_live_severity(joint):
+            # If we have a live angle and a peak reference, scale severity the same way.
+            if joint in frame_angles and frame_angles[joint] is not None and joint in peak_deviations:
+                peak = peak_deviations[joint]
+                # Re-compute severity using same 2*std denominator from peak data.
+                # severity = deviation / (2*std)  =>  2*std = deviation / severity
+                if peak['severity_score'] > 0:
+                    two_std = peak['deviation_deg'] / peak['severity_score']
+                    live_dev = abs(frame_angles[joint] - (peak['angle'] - peak['deviation_deg']
+                                   if peak['direction'] == 'too_high'
+                                   else peak['angle'] + peak['deviation_deg']))
+                    return min(live_dev / two_std, 1.0), frame_angles[joint]
+            # Fall back to peak value
+            if joint in peak_deviations:
+                return peak_deviations[joint]['severity_score'], peak_deviations[joint]['angle']
+            return None, None
+
+        def severity_color(severity):
+            if severity < 0.3:
+                return (76, 175, 80)   # Green
+            elif severity < 0.6:
+                return (255, 152, 0)   # Amber
+            else:
+                return (244, 67, 54)   # Red
+
+        # Draw deviation overlays — coloured dots, live per frame
+        for joint, landmark_name in joint_landmarks.items():
+            if landmark_name in kp:
+                x, y = int(kp[landmark_name]['x'] * width), int(kp[landmark_name]['y'] * height)
+                severity, _ = get_live_severity(joint)
+                if severity is not None:
+                    cv2.circle(frame, (x, y), 10, severity_color(severity), -1)
+
+        # Draw HUD — live angle values update every frame
+        y_offset = 30
+        for i, (joint, landmark_name) in enumerate(joint_landmarks.items()):
+            severity, live_angle = get_live_severity(joint)
+            if severity is None:
+                continue
+            color = severity_color(severity)
+            joint_label = joint.replace('_', ' ')
+            text = f"{joint_label}: {live_angle:.1f}deg"
+            cv2.putText(frame, text, (10, y_offset + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
         out.write(frame)
         frame_num += 1
