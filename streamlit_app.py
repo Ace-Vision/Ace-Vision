@@ -139,22 +139,48 @@ if "results" in st.session_state:
     sport_label = "Badminton Clear" if result["sport_type"] == "badminton" else "Tennis Serve"
     st.subheader(f"Results — {sport_label}")
 
-    deviations = result["deviation_scores"].get("deviations", {})
+    # Human-readable labels for each checkpoint key
+    CHECKPOINT_LABELS = {
+        "trophy":      "Trophy Position",
+        "racket_drop": "Racket Drop",
+        "contact":     "Contact (Ball Strike)",
+    }
 
-    if not deviations:
-        st.warning("No deviation data returned. Check that your video has a visible player.")
+    checkpoints = result["deviation_scores"].get("checkpoints", {})
+
+    if not checkpoints:
+        st.warning("No checkpoint data returned. Check that your video has a visible player.")
     else:
-        # Show each joint as a coloured line
-        for joint_key, info in deviations.items():
-            colour = get_severity_colour(info["severity_score"])
-            joint_name = format_joint_name(joint_key)
-            direction = info["direction"].replace("_", " ")
+        # Show one collapsible section per checkpoint.
+        # Contact is open by default since that's the most important moment.
+        for checkpoint_key in ["trophy", "racket_drop", "contact"]:
+            label      = CHECKPOINT_LABELS[checkpoint_key]
+            is_contact = checkpoint_key == "contact"
 
-            st.markdown(
-                f":{colour}[**{joint_name}**] &nbsp; "
-                f"`{info['angle']:.1f}°` — "
-                f"{info['deviation_deg']:.1f}° off &nbsp;·&nbsp; {direction}"
-            )
+            with st.expander(label, expanded=is_contact):
+                data = checkpoints.get(checkpoint_key)
+
+                # This checkpoint wasn't detected in the video
+                if data is None:
+                    st.info(f"Could not detect {label} in this video.")
+                    continue
+
+                st.caption(f"Detected at frame {data['frame']}")
+
+                deviations = data.get("deviations", {})
+                if not deviations:
+                    st.info("No joint data for this checkpoint.")
+                else:
+                    for joint_key, info in deviations.items():
+                        colour     = get_severity_colour(info["severity_score"])
+                        joint_name = format_joint_name(joint_key)
+                        direction  = info["direction"].replace("_", " ")
+
+                        st.markdown(
+                            f":{colour}[**{joint_name}**] &nbsp; "
+                            f"`{info['angle']:.1f}°` — "
+                            f"{info['deviation_deg']:.1f}° off &nbsp;·&nbsp; {direction}"
+                        )
 
     overlay_path_str = st.session_state.get("last_overlay_path")
     if overlay_path_str:
