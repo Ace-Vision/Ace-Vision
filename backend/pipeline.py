@@ -24,8 +24,8 @@ from ml import extractor, calculator, scorer, renderer
 # Maps each sport to its sample video file.
 # When the user picks a sport, we load the corresponding video.
 SAMPLE_VIDEOS = {
-    "badminton": "data/samples/badminton_clear.mp4",
-    "tennis_serve": "data/samples/tennis_serve.mp4",
+    "badminton": "data/samples/badminton/badminton_clear.mp4",
+    "tennis_serve": "data/samples/tennis/tennis_serve.mp4",
 }
 
 
