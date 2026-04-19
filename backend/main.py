@@ -44,7 +44,11 @@ async def analyse(
 
     try:
         result = await asyncio.to_thread(pipeline.run_pipeline, tmp_path, sport_type, skill_level)
-    finally:
+    except Exception as exc:
+        os.unlink(tmp_path)
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    else:
         os.unlink(tmp_path)
 
     coaching = await asyncio.to_thread(llm.get_coaching, result["deviation_scores"], skill_level)

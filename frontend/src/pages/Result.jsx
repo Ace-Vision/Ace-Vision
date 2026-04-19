@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 
 const FALLBACK = {
   overall_score: 0,
@@ -112,9 +113,41 @@ function Result() {
         {/* Coaching feedback */}
         {coaching?.advice && (
           <div>
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Coaching Advice</h2>
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{coaching.advice}</p>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">🎾</span>
+              <h2 className="text-sm font-semibold text-gray-900">Coaching Advice</h2>
+            </div>
+            <div className="bg-gradient-to-br from-purple-50 to-white rounded-2xl p-5 shadow-sm border border-purple-100 space-y-3">
+              <ReactMarkdown
+                components={{
+                  p: ({ children }) => (
+                    <p className="text-sm text-gray-700 leading-relaxed">{children}</p>
+                  ),
+                  strong: ({ children }) => (
+                    <span className="font-semibold text-gray-900">{children}</span>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="space-y-1.5 pl-1">{children}</ul>
+                  ),
+                  li: ({ children }) => (
+                    <li className="flex gap-2 text-sm text-gray-700 leading-relaxed">
+                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
+                      <span>{children}</span>
+                    </li>
+                  ),
+                  h1: ({ children }) => (
+                    <h3 className="text-sm font-bold text-purple-800 mt-4 first:mt-0">{children}</h3>
+                  ),
+                  h2: ({ children }) => (
+                    <h3 className="text-sm font-bold text-purple-800 mt-4 first:mt-0">{children}</h3>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-sm font-bold text-purple-800 mt-4 first:mt-0">{children}</h3>
+                  ),
+                }}
+              >
+                {coaching.advice}
+              </ReactMarkdown>
             </div>
           </div>
         )}

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(python -m uvicorn backend.main:app --reload --port 8000)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s -X POST http://localhost:8000/analyse -F \"file=@c:/Users/cssky/OneDrive/Desktop/Ace-Vision/backend/ui_mockup/test.mp4\" -F \"sport_type=badminton\" -F \"skill_level=intermediate\")",
+      "Bash(curl -v http://localhost:8000/analyse)",
+      "Bash(python -m uvicorn backend.main:app --port 8000)",
+      "Bash(pip install *)",
+      "Bash(python -m uvicorn backend.main:app --port 8001)",
+      "Bash(netstat -ano)",
+      "Bash(wmic process *)",
+      "Bash(echo \"dummy\")",
+      "Bash(curl -s -X POST http://localhost:8000/analyse -F \"file=@/tmp/test.webm\" -F \"sport_type=badminton\" -F \"skill_level=intermediate\")",
+      "Bash(C:/Users/cssky/AppData/Local/Programs/Python/Python313/python.exe -c ' *)"
+    ]
+  }
+}
