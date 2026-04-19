@@ -13,22 +13,10 @@ const CHECKPOINTS = [
   { key: 'contact',     label: 'Contact' },
 ];
 
-function severityClass(s) {
-  if (s < 0.3) return 'border-green-500';
-  if (s < 0.6) return 'border-amber-500';
-  return 'border-red-500';
-}
-
-function severityBadge(s) {
-  if (s < 0.3) return 'bg-green-100 text-green-700';
-  if (s < 0.6) return 'bg-amber-100 text-amber-700';
-  return 'bg-red-100 text-red-700';
-}
-
-function severityLabel(s) {
-  if (s < 0.3) return 'Good';
-  if (s < 0.6) return 'Fair';
-  return 'Needs work';
+function severity(s) {
+  if (s < 0.3) return { border: 'border-green-500', badge: 'bg-green-100 text-green-700', label: 'Good' };
+  if (s < 0.6) return { border: 'border-amber-500', badge: 'bg-amber-100 text-amber-700', label: 'Fair' };
+  return { border: 'border-red-500',  badge: 'bg-red-100 text-red-700',   label: 'Needs work' };
 }
 
 function formatJointName(key) {
@@ -42,11 +30,11 @@ function JointList({ deviations }) {
   return (
     <div className="space-y-2">
       {Object.entries(deviations).map(([joint, d]) => (
-        <div key={joint} className={`bg-white rounded-xl p-4 border-l-4 ${severityClass(d.severity_score)} shadow-sm`}>
+        <div key={joint} className={`bg-white rounded-xl p-4 border-l-4 ${severity(d.severity_score).border} shadow-sm`}>
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-900">{formatJointName(joint)}</span>
-            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${severityBadge(d.severity_score)}`}>
-              {severityLabel(d.severity_score)}
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${severity(d.severity_score).badge}`}>
+              {severity(d.severity_score).label}
             </span>
           </div>
           <p className="text-xs text-gray-400 mt-1">
@@ -64,7 +52,7 @@ function Result() {
   const [activeCheckpoint, setActiveCheckpoint] = useState('trophy');
 
   const result = state?.result ?? FALLBACK;
-  const { overall_score, sport_type, deviation_scores } = result;
+  const { overall_score, sport_type, deviation_scores, coaching } = result;
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const sportLabel = sport_type === 'tennis_serve' ? 'Tennis' : 'Badminton';
 
@@ -120,6 +108,16 @@ function Result() {
 
           <JointList deviations={activeDeviations} />
         </div>
+
+        {/* Coaching feedback */}
+        {coaching?.advice && (
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 mb-3">Coaching Advice</h2>
+            <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{coaching.advice}</p>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

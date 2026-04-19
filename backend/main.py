@@ -6,6 +6,7 @@ Endpoints:
                    return deviation scores + overall score + session_id.
 """
 
+import asyncio
 import os
 import shutil
 import tempfile
@@ -14,7 +15,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.schemas import AnalyseResponse
-from backend import pipeline
+from backend import pipeline, llm
 
 app = FastAPI(title="Ace Vision API")
 
@@ -42,9 +43,11 @@ async def analyse(
         tmp_path = tmp.name
 
     try:
-        result = pipeline.run_pipeline(tmp_path, sport_type, skill_level)
+        result = await asyncio.to_thread(pipeline.run_pipeline, tmp_path, sport_type, skill_level)
     finally:
         os.unlink(tmp_path)
+
+    coaching = await asyncio.to_thread(llm.get_coaching, result["deviation_scores"], skill_level)
 
     return AnalyseResponse(
         session_id=result["session_id"],
@@ -52,4 +55,5 @@ async def analyse(
         overlay_path=result["overlay_path"],
         sport_type=sport_type,
         overall_score=result["overall_score"],
+        coaching=coaching,
     )
