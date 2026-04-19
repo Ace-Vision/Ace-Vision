@@ -17,12 +17,35 @@ Key responsibilities:
 - Handle errors at each stage and report which step failed
 """
 
+import glob
 import uuid
 
 from ml import extractor, calculator, scorer, renderer
 
+# Maps each sport to its sample video folder.
+# We pick the first video file found in the folder so the filename doesn't matter.
+SAMPLE_DIRS = {
+    "badminton":    "data/samples/badminton",
+    "tennis_serve": "data/samples/tennis",
+}
 
-def run_pipeline(video_path: str, sport_type: str) -> dict:
+
+def _find_sample_video(sport_type: str) -> str:
+    """
+    Find the first .mp4 or .avi file in the sample folder for this sport.
+    Raises FileNotFoundError if the folder is empty.
+    """
+    folder = SAMPLE_DIRS[sport_type]
+    matches = glob.glob(f"{folder}/*.mp4") + glob.glob(f"{folder}/*.avi")
+    if not matches:
+        raise FileNotFoundError(
+            f"No video files found in '{folder}'. "
+            f"Add an .mp4 or .avi sample video for {sport_type}."
+        )
+    return matches[0]
+
+
+def run_pipeline(sport_type: str, skill_level: str) -> dict:
     """
     Run the full ML pipeline on the given video file and return the results.
 
@@ -34,18 +57,27 @@ def run_pipeline(video_path: str, sport_type: str) -> dict:
         dict: Contains session_id, deviation_scores, overlay_path, sport_type, overall_score.
     """
 
-    # Step 1: Extract pose keypoints from every frame in the video
+    # Step 1: Find the sample video for the chosen sport (any filename works)
+    video_path = _find_sample_video(sport_type)
+
+    # Step 2: Extract pose keypoints from every frame in the video
     keypoints_list = extractor.extract_keypoints(video_path)
 
     # Step 2: Calculate joint angles for every frame
     # (smoother and normaliser are skipped for now — not yet implemented)
     angles_list = calculator.calculate_angles(keypoints_list)
 
-    # Step 3: Score the player's angles against the expert baselines for this sport
-    deviation_scores = scorer.score_deviations(angles_list, sport_type)
+    # Step 4: Score the player's angles against the expert baselines for this sport.
+    # Pass keypoints_list so the scorer can detect trophy + racket_drop checkpoints.
+    deviation_scores = scorer.score_deviations(
+        angles_list,
+        sport_type,
+        keypoints_list=keypoints_list,
+    )
 
-    # Step 4: Render the overlay video with colour-coded skeleton
-    overlay_path = renderer.render_video(video_path, keypoints_list, deviation_scores)
+    # Step 5: Render the overlay video with colour-coded skeleton.
+    # Pass angles_list so the renderer can show live per-frame values in the HUD.
+    overlay_path = renderer.render_video(video_path, keypoints_list, deviation_scores, angles_list)
 
     # Step 5: Compute overall score (100 = perfect, 0 = all joints at max deviation)
     deviations = deviation_scores.get("deviations", {})
