@@ -42,7 +42,7 @@ async def analyse(
         tmp_path = tmp.name
 
     try:
-        result = pipeline.run_pipeline(tmp_path, sport_type)
+        result = pipeline.run_pipeline(tmp_path, sport_type, skill_level)
     finally:
         os.unlink(tmp_path)
 

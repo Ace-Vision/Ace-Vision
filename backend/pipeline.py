@@ -45,20 +45,20 @@ def _find_sample_video(sport_type: str) -> str:
     return matches[0]
 
 
-def run_pipeline(sport_type: str, skill_level: str) -> dict:
+def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dict:
     """
     Run the full ML pipeline on the given video file and return the results.
 
     Args:
         video_path (str): Path to the uploaded video file.
         sport_type (str): Either "badminton" or "tennis_serve".
+        skill_level (str): Player's self-reported level.
 
     Returns:
         dict: Contains session_id, deviation_scores, overlay_path, sport_type, overall_score.
     """
 
-    # Step 1: Find the sample video for the chosen sport (any filename works)
-    video_path = _find_sample_video(sport_type)
+    # Step 1: Use the uploaded video directly
 
     # Step 2: Extract pose keypoints from every frame in the video
     keypoints_list = extractor.extract_keypoints(video_path)
