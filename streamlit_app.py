@@ -18,10 +18,13 @@ import streamlit as st
 BACKEND_URL = "http://127.0.0.1:8000"
 
 
+@st.cache_data(ttl=300)
 def get_severity_colour(severity_score: float) -> str:
     """
     Return a colour name based on how severe the deviation is.
     Green = good, Orange = needs work, Red = significant issue.
+    
+    Cached to avoid recomputation on reruns.
     """
     if severity_score < 0.3:
         return "green"
