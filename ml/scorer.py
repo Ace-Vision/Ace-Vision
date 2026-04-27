@@ -30,6 +30,33 @@ BASELINES_MAP = {
     "badminton": "data/reference/badminton_baselines.json",
 }
 
+# Cache baselines in memory to avoid re-reading JSON files
+_baselines_cache = {}
+
+
+def _load_baselines(sport_type: str) -> dict:
+    """Load and cache baselines for a sport type."""
+    if sport_type in _baselines_cache:
+        return _baselines_cache[sport_type]
+    
+    if sport_type not in BASELINES_MAP:
+        raise ValueError(f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}")
+
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    baselines_path = os.path.join(repo_root, BASELINES_MAP[sport_type])
+
+    if not os.path.exists(baselines_path):
+        raise FileNotFoundError(
+            f"Baseline file not found for '{sport_type}'. "
+            f"Expected: '{baselines_path}'."
+        )
+
+    with open(baselines_path, "r") as f:
+        baselines = json.load(f)
+    
+    _baselines_cache[sport_type] = baselines
+    return baselines
+
 
 def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") -> dict:
     """
@@ -42,21 +69,8 @@ def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") 
     Returns:
         dict: Deviation scores and other metrics.
     """
-    if sport_type not in BASELINES_MAP:
-        raise ValueError(f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}")
-
-    # Load the sport-specific baselines only.
-    repo_root = os.path.dirname(os.path.dirname(__file__))
-    baselines_path = os.path.join(repo_root, BASELINES_MAP[sport_type])
-
-    if not os.path.exists(baselines_path):
-        raise FileNotFoundError(
-            f"Baseline file not found for '{sport_type}'. "
-            f"Expected: '{baselines_path}'."
-        )
-
-    with open(baselines_path, "r") as f:
-        baselines = json.load(f)
+    # Load cached baselines for the sport
+    baselines = _load_baselines(sport_type)
 
     # Find peak frame (simplified: use the frame with max right_elbow_flexion or first valid)
     peak_frame = None
@@ -91,6 +105,9 @@ def score_deviations(angles_list: list[dict], sport_type: str = "tennis_serve") 
     hip_leads_shoulder = False
     # Placeholder: assume based on some logic, e.g., if hip angle peaks before shoulder
 
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    baselines_path = os.path.join(repo_root, BASELINES_MAP[sport_type])
+    
     result = {
         "peak_frame": peak_frame,
         "deviations": deviations,
