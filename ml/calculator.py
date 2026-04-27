@@ -24,6 +24,50 @@ import math
 import numpy as np
 
 
+# Pre-compute joint-to-keypoint mappings to avoid rebuilding every frame
+JOINT_KEYPOINTS = {
+    'right_elbow_flexion': ('right_shoulder', 'right_elbow', 'right_wrist'),
+    'left_elbow_flexion': ('left_shoulder', 'left_elbow', 'left_wrist'),
+    'right_shoulder_abduction': ('right_hip', 'right_shoulder', 'right_elbow'),
+    'left_shoulder_abduction': ('left_hip', 'left_shoulder', 'left_elbow'),
+    'right_knee_flexion': ('right_hip', 'right_knee', 'right_ankle'),
+    'left_knee_flexion': ('left_hip', 'left_knee', 'left_ankle'),
+    'trunk_lateral_tilt': ('left_hip', 'nose', 'right_hip'),
+    'hip_shoulder_separation': ('left_hip', 'left_shoulder', 'right_shoulder'),
+    'wrist_extension': ('right_elbow', 'right_wrist', 'right_index'),
+}
+
+
+def _get_point(keypoints: dict, name: str) -> np.ndarray | None:
+    """Get a single keypoint as a numpy array, or None if missing."""
+    if name in keypoints:
+        kp = keypoints[name]
+        return np.array([kp['x'], kp['y'], kp['z']], dtype=np.float32)
+    return None
+
+
+def _calc_angle(p1: np.ndarray, vertex: np.ndarray, p2: np.ndarray) -> float | None:
+    """
+    Calculate angle at vertex between vectors to p1 and p2.
+    Uses dot-product formula: θ = arccos(dot(v1, v2) / (|v1| × |v2|))
+    """
+    if p1 is None or vertex is None or p2 is None:
+        return None
+    
+    v1 = p1 - vertex
+    v2 = p2 - vertex
+    dot = np.dot(v1, v2)
+    mag1 = np.linalg.norm(v1)
+    mag2 = np.linalg.norm(v2)
+    
+    if mag1 == 0 or mag2 == 0:
+        return None
+    
+    cos_theta = dot / (mag1 * mag2)
+    cos_theta = np.clip(cos_theta, -1, 1)
+    return math.degrees(math.acos(cos_theta))
+
+
 def calculate_angles(keypoints_list: list[dict]) -> list[dict]:
     """
     Calculate joint angles from keypoints for each frame.
@@ -43,74 +87,12 @@ def calculate_angles(keypoints_list: list[dict]) -> list[dict]:
             angles_list.append({})
             continue
 
-        # Helper function to get point
-        def get_point(name):
-            if name in kp:
-                return np.array([kp[name]['x'], kp[name]['y'], kp[name]['z']])
-            return None
-
-        # Helper function to calculate angle
-        def calc_angle(p1, vertex, p2):
-            if p1 is None or vertex is None or p2 is None:
-                return None
-            v1 = p1 - vertex
-            v2 = p2 - vertex
-            dot = np.dot(v1, v2)
-            mag1 = np.linalg.norm(v1)
-            mag2 = np.linalg.norm(v2)
-            if mag1 == 0 or mag2 == 0:
-                return None
-            cos_theta = dot / (mag1 * mag2)
-            cos_theta = np.clip(cos_theta, -1, 1)
-            return math.degrees(math.acos(cos_theta))
-
-        # Right elbow flexion: right_shoulder, right_elbow, right_wrist
-        angles['right_elbow_flexion'] = calc_angle(
-            get_point('right_shoulder'), get_point('right_elbow'), get_point('right_wrist')
-        )
-
-        # Left elbow flexion: left_shoulder, left_elbow, left_wrist
-        angles['left_elbow_flexion'] = calc_angle(
-            get_point('left_shoulder'), get_point('left_elbow'), get_point('left_wrist')
-        )
-
-        # Right shoulder abduction: right_hip, right_shoulder, right_elbow
-        angles['right_shoulder_abduction'] = calc_angle(
-            get_point('right_hip'), get_point('right_shoulder'), get_point('right_elbow')
-        )
-
-        # Left shoulder abduction: left_hip, left_shoulder, left_elbow
-        angles['left_shoulder_abduction'] = calc_angle(
-            get_point('left_hip'), get_point('left_shoulder'), get_point('left_elbow')
-        )
-
-        # Right knee flexion: right_hip, right_knee, right_ankle
-        angles['right_knee_flexion'] = calc_angle(
-            get_point('right_hip'), get_point('right_knee'), get_point('right_ankle')
-        )
-
-        # Left knee flexion: left_hip, left_knee, left_ankle
-        angles['left_knee_flexion'] = calc_angle(
-            get_point('left_hip'), get_point('left_knee'), get_point('left_ankle')
-        )
-
-        # Trunk lateral tilt: left_hip, nose, right_hip (or similar)
-        # Assuming trunk tilt as angle at nose between left_hip and right_hip
-        angles['trunk_lateral_tilt'] = calc_angle(
-            get_point('left_hip'), get_point('nose'), get_point('right_hip')
-        )
-
-        # Hip-shoulder separation: left_hip, left_shoulder, right_shoulder
-        # Angle at left_shoulder between left_hip and right_shoulder
-        angles['hip_shoulder_separation'] = calc_angle(
-            get_point('left_hip'), get_point('left_shoulder'), get_point('right_shoulder')
-        )
-
-        # Wrist extension: right_elbow, right_wrist, right_index (or middle finger)
-        # Assuming right_wrist extension
-        angles['wrist_extension'] = calc_angle(
-            get_point('right_elbow'), get_point('right_wrist'), get_point('right_index')
-        )
+        # Use pre-computed joint mapping to avoid rebuilding
+        for joint, (p1_name, vertex_name, p2_name) in JOINT_KEYPOINTS.items():
+            p1 = _get_point(kp, p1_name)
+            vertex = _get_point(kp, vertex_name)
+            p2 = _get_point(kp, p2_name)
+            angles[joint] = _calc_angle(p1, vertex, p2)
 
         angles_list.append(angles)
 
