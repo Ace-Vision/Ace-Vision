@@ -27,12 +27,24 @@ BASELINES_MAP = {
 
 # ── Checkpoint detection helpers ────────────────────────────────────────────
 
+VISIBILITY_THRESHOLD = 0.5  # MediaPipe landmarks below this are unreliable
+
+
+def _is_visible(kp: dict, *landmark_names: str) -> bool:
+    """Return True only if all named landmarks exist and meet the visibility threshold."""
+    return all(
+        name in kp and kp[name].get('visibility', 0) >= VISIBILITY_THRESHOLD
+        for name in landmark_names
+    )
+
+
 def _find_trophy_frame(keypoints_list: list[dict]) -> int | None:
     """
     Find the frame where the right wrist is highest (trophy position).
 
     In MediaPipe normalized coords, y=0 is the TOP of the frame.
     So the highest wrist = the frame with the SMALLEST right_wrist y value.
+    Only considers frames where the wrist and elbow are both confidently visible.
 
     Args:
         keypoints_list: per-frame keypoint dicts from extractor.py
@@ -41,14 +53,15 @@ def _find_trophy_frame(keypoints_list: list[dict]) -> int | None:
         Frame index, or None if right_wrist is never visible.
     """
     best_frame = None
-    best_y = float('inf')   # we want the smallest y
+    best_y = float('inf')
 
     for i, kp in enumerate(keypoints_list):
-        if kp and 'right_wrist' in kp:
-            y = kp['right_wrist']['y']
-            if y < best_y:
-                best_y = y
-                best_frame = i
+        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
+            continue
+        y = kp['right_wrist']['y']
+        if y < best_y:
+            best_y = y
+            best_frame = i
 
     return best_frame
 
@@ -60,6 +73,7 @@ def _find_racket_drop_frame(keypoints_list: list[dict], after_frame: int) -> int
     The lowest wrist = the frame with the LARGEST right_wrist y value.
     We only search frames that come after the trophy frame so we don't
     accidentally pick a frame from earlier in the video.
+    Only considers frames where the wrist and elbow are both confidently visible.
 
     Args:
         keypoints_list: per-frame keypoint dicts from extractor.py
@@ -69,30 +83,33 @@ def _find_racket_drop_frame(keypoints_list: list[dict], after_frame: int) -> int
         Frame index, or None if right_wrist is never visible after trophy.
     """
     best_frame = None
-    best_y = float('-inf')  # we want the largest y
+    best_y = float('-inf')
 
     for i, kp in enumerate(keypoints_list):
         if i <= after_frame:
-            continue  # skip everything before (and including) the trophy frame
-        if kp and 'right_wrist' in kp:
-            y = kp['right_wrist']['y']
-            if y > best_y:
-                best_y = y
-                best_frame = i
+            continue
+        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
+            continue
+        y = kp['right_wrist']['y']
+        if y > best_y:
+            best_y = y
+            best_frame = i
 
     return best_frame
 
 
-def _find_contact_frame(angles_list: list[dict], after_frame: int) -> int | None:
+def _find_contact_frame(angles_list: list[dict], after_frame: int, keypoints_list: list[dict] | None = None) -> int | None:
     """
     Find the frame of ball contact (max right elbow extension), after racket drop.
 
     At contact, the arm is fully extended so right_elbow_flexion is at its peak.
     We only search frames after the racket drop to avoid false positives.
+    When keypoints_list is provided, skips frames where the elbow is not confidently visible.
 
     Args:
-        angles_list:  per-frame angle dicts from calculator.py
-        after_frame:  only look at frames with index > after_frame
+        angles_list:    per-frame angle dicts from calculator.py
+        after_frame:    only look at frames with index > after_frame
+        keypoints_list: optional per-frame keypoint dicts for visibility filtering
 
     Returns:
         Frame index, or None if no valid elbow angle is found after racket drop.
@@ -102,7 +119,11 @@ def _find_contact_frame(angles_list: list[dict], after_frame: int) -> int | None
 
     for i, angles in enumerate(angles_list):
         if i <= after_frame:
-            continue  # skip everything before (and including) the racket drop frame
+            continue
+        if keypoints_list and i < len(keypoints_list):
+            kp = keypoints_list[i]
+            if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
+                continue
         if angles and 'right_elbow_flexion' in angles:
             angle = angles['right_elbow_flexion']
             if angle is not None and angle > best_angle:
@@ -209,7 +230,7 @@ def score_deviations(
 
     trophy_frame      = _find_trophy_frame(kp_list)
     racket_drop_frame = _find_racket_drop_frame(kp_list, after_frame=trophy_frame or 0)
-    contact_frame     = _find_contact_frame(angles_list, after_frame=racket_drop_frame or 0)
+    contact_frame     = _find_contact_frame(angles_list, after_frame=racket_drop_frame or 0, keypoints_list=kp_list)
 
     # ── 3. Score each detected checkpoint ────────────────────────────────────
     def score_checkpoint(frame_idx, checkpoint_name):

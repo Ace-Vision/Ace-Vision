@@ -94,17 +94,43 @@ def calculate_angles(keypoints_list: list[dict]) -> list[dict]:
             get_point('left_hip'), get_point('left_knee'), get_point('left_ankle')
         )
 
-        # Trunk lateral tilt: left_hip, nose, right_hip (or similar)
-        # Assuming trunk tilt as angle at nose between left_hip and right_hip
-        angles['trunk_lateral_tilt'] = calc_angle(
-            get_point('left_hip'), get_point('nose'), get_point('right_hip')
-        )
+        # Trunk lateral tilt: angle between the trunk vector (hip-midpoint → shoulder-midpoint)
+        # and the vertical axis (0, -1) in the image plane.
+        # Using only x/y since z adds noise from MediaPipe's depth estimation.
+        ls, rs = get_point('left_shoulder'), get_point('right_shoulder')
+        lh, rh = get_point('left_hip'),      get_point('right_hip')
+        if ls is not None and rs is not None and lh is not None and rh is not None:
+            shoulder_mid = (ls[:2] + rs[:2]) / 2
+            hip_mid      = (lh[:2] + rh[:2]) / 2
+            trunk_vec    = shoulder_mid - hip_mid          # points upward in image coords (y flipped)
+            vertical     = np.array([0.0, -1.0])           # up in image coords
+            mag = np.linalg.norm(trunk_vec)
+            if mag > 0:
+                cos_t = np.clip(np.dot(trunk_vec / mag, vertical), -1, 1)
+                angles['trunk_lateral_tilt'] = math.degrees(math.acos(cos_t))
+            else:
+                angles['trunk_lateral_tilt'] = None
+        else:
+            angles['trunk_lateral_tilt'] = None
 
-        # Hip-shoulder separation: left_hip, left_shoulder, right_shoulder
-        # Angle at left_shoulder between left_hip and right_shoulder
-        angles['hip_shoulder_separation'] = calc_angle(
-            get_point('left_hip'), get_point('left_shoulder'), get_point('right_shoulder')
-        )
+        # Hip-shoulder separation: angle between the hip axis and the shoulder axis,
+        # both measured as 2-D vectors across the frame.
+        # A value of 0° means hips and shoulders face the same direction;
+        # larger values indicate more rotation between the two segments.
+        if ls is not None and rs is not None and lh is not None and rh is not None:
+            shoulder_axis = rs[:2] - ls[:2]
+            hip_axis      = rh[:2] - lh[:2]
+            mag_s = np.linalg.norm(shoulder_axis)
+            mag_h = np.linalg.norm(hip_axis)
+            if mag_s > 0 and mag_h > 0:
+                cos_t = np.clip(
+                    np.dot(shoulder_axis / mag_s, hip_axis / mag_h), -1, 1
+                )
+                angles['hip_shoulder_separation'] = math.degrees(math.acos(cos_t))
+            else:
+                angles['hip_shoulder_separation'] = None
+        else:
+            angles['hip_shoulder_separation'] = None
 
         # Wrist extension: right_elbow, right_wrist, right_index (or middle finger)
         # Assuming right_wrist extension
