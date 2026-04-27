@@ -133,6 +133,71 @@ def _find_contact_frame(angles_list: list[dict], after_frame: int, keypoints_lis
     return best_frame
 
 
+# ── Badminton clear–specific detection ──────────────────────────────────────
+
+def _find_clear_contact_frame(keypoints_list: list[dict]) -> int | None:
+    """
+    Find the contact frame for a badminton clear: the frame where the right
+    wrist is at its highest point (minimum y in MediaPipe coords).
+
+    For a clear the player reaches up to strike the shuttle at the top of
+    their reach, so highest wrist == contact.
+    """
+    return _find_trophy_frame(keypoints_list)
+
+
+def _find_backswing_frame(
+    angles_list: list[dict],
+    before_frame: int,
+    keypoints_list: list[dict] | None = None,
+) -> int | None:
+    """
+    Find the backswing (loading) frame for a badminton clear.
+
+    Searches the 120 frames immediately before contact for the frame where
+    right_elbow_flexion is smallest (most bent = arm fully cocked).
+
+    Args:
+        angles_list:  per-frame angle dicts
+        before_frame: contact frame index — only search frames before this
+        keypoints_list: optional, used for visibility filtering
+
+    Returns:
+        Frame index, or None if not found.
+    """
+    search_start = max(0, before_frame - 120)
+    best_frame = None
+    min_angle = float('inf')
+
+    for i in range(search_start, before_frame):
+        if keypoints_list and i < len(keypoints_list):
+            kp = keypoints_list[i]
+            if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
+                continue
+        angles = angles_list[i] if i < len(angles_list) else {}
+        if angles and 'right_elbow_flexion' in angles:
+            angle = angles['right_elbow_flexion']
+            if angle is not None and angle < min_angle:
+                min_angle = angle
+                best_frame = i
+
+    return best_frame
+
+
+def _find_follow_through_frame(
+    keypoints_list: list[dict],
+    after_frame: int,
+) -> int | None:
+    """
+    Find the follow-through frame for a badminton clear.
+
+    After contact the racket arm swings down and across the body.
+    Searches for the frame where the right wrist is at its lowest point
+    (maximum y) after contact.
+    """
+    return _find_racket_drop_frame(keypoints_list, after_frame=after_frame)
+
+
 # ── Single-frame scorer ──────────────────────────────────────────────────────
 
 def _score_one_frame(frame_angles: dict, checkpoint_baselines: dict) -> dict:
@@ -222,47 +287,63 @@ def score_deviations(
     with open(baselines_path, "r") as f:
         baselines = json.load(f)
 
-    # ── 2. Detect the three checkpoints in order ─────────────────────────────
-    # Each checkpoint must happen AFTER the previous one.
-    # If detection fails, we pass after_frame=0 so the next step still runs.
-
+    # ── 2. Detect checkpoints (sport-specific) ──────────────────────────────
     kp_list = keypoints_list or []
 
-    trophy_frame      = _find_trophy_frame(kp_list)
-    racket_drop_frame = _find_racket_drop_frame(kp_list, after_frame=trophy_frame or 0)
-    contact_frame     = _find_contact_frame(angles_list, after_frame=racket_drop_frame or 0, keypoints_list=kp_list)
-
-    # ── 3. Score each detected checkpoint ────────────────────────────────────
     def score_checkpoint(frame_idx, checkpoint_name):
-        """Helper: score a single checkpoint, return None if not detected."""
+        """Score one checkpoint frame against the given baseline key."""
         if frame_idx is None:
             return None
         frame_angles = angles_list[frame_idx] if frame_idx < len(angles_list) else {}
         deviations   = _score_one_frame(frame_angles, baselines[checkpoint_name])
-        return {
-            "frame":      frame_idx,
-            "deviations": deviations,
+        return {"frame": frame_idx, "deviations": deviations}
+
+    if sport_type == "badminton":
+        # ── Badminton clear checkpoints ──────────────────────────────────────
+        # Order: contact is detected first (highest wrist = hit moment),
+        # then backswing is found before it, follow_through after it.
+        contact_frame       = _find_clear_contact_frame(kp_list)
+        backswing_frame     = _find_backswing_frame(
+            angles_list, before_frame=contact_frame or 0, keypoints_list=kp_list
+        )
+        follow_through_frame = _find_follow_through_frame(
+            kp_list, after_frame=contact_frame or 0
+        )
+
+        checkpoints = {
+            "backswing":      score_checkpoint(backswing_frame,      "backswing"),
+            "contact":        score_checkpoint(contact_frame,        "contact"),
+            "follow_through": score_checkpoint(follow_through_frame, "follow_through"),
         }
+        primary_deviations = (
+            checkpoints["contact"]["deviations"]
+            if checkpoints["contact"] is not None else {}
+        )
 
-    checkpoints = {
-        "trophy":      score_checkpoint(trophy_frame,      "trophy"),
-        "racket_drop": score_checkpoint(racket_drop_frame, "racket_drop"),
-        "contact":     score_checkpoint(contact_frame,     "contact"),
-    }
+    else:
+        # ── Tennis serve checkpoints (unchanged) ─────────────────────────────
+        trophy_frame      = _find_trophy_frame(kp_list)
+        racket_drop_frame = _find_racket_drop_frame(kp_list, after_frame=trophy_frame or 0)
+        contact_frame     = _find_contact_frame(
+            angles_list, after_frame=racket_drop_frame or 0, keypoints_list=kp_list
+        )
 
-    # ── 4. Backward-compat: flat "deviations" key for renderer.py ────────────
-    # renderer.py reads deviation_scores["deviations"] directly.
-    # We give it the contact checkpoint deviations so the overlay video
-    # keeps working without any changes to renderer.py.
-    contact_deviations = (
-        checkpoints["contact"]["deviations"]
-        if checkpoints["contact"] is not None
-        else {}
-    )
+        checkpoints = {
+            "trophy":      score_checkpoint(trophy_frame,      "trophy"),
+            "racket_drop": score_checkpoint(racket_drop_frame, "racket_drop"),
+            "contact":     score_checkpoint(contact_frame,     "contact"),
+        }
+        primary_deviations = (
+            checkpoints["contact"]["deviations"]
+            if checkpoints["contact"] is not None else {}
+        )
+
+    # ── 3. Flat "deviations" key for renderer.py ────────────────────────────
+    # renderer.py reads deviation_scores["deviations"] directly (contact frame).
 
     return {
         "checkpoints":        checkpoints,
-        "deviations":         contact_deviations,
+        "deviations":         primary_deviations,
         "hip_leads_shoulder": False,  # placeholder — timing check not yet implemented
         "baseline_source":    os.path.relpath(baselines_path, repo_root),
     }

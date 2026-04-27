@@ -10,11 +10,18 @@ const FALLBACK = {
   deviation_scores: { deviations: {}, checkpoints: {} },
 };
 
-const CHECKPOINTS = [
-  { key: 'trophy',      label: 'Trophy' },
-  { key: 'racket_drop', label: 'Racket Drop' },
-  { key: 'contact',     label: 'Contact' },
-];
+const CHECKPOINTS_BY_SPORT = {
+  badminton: [
+    { key: 'backswing',      label: 'Backswing' },
+    { key: 'contact',        label: 'Contact' },
+    { key: 'follow_through', label: 'Follow Through' },
+  ],
+  tennis_serve: [
+    { key: 'trophy',      label: 'Trophy' },
+    { key: 'racket_drop', label: 'Racket Drop' },
+    { key: 'contact',     label: 'Contact' },
+  ],
+};
 
 function severity(s) {
   if (s < 0.3) return { border: 'border-green-500', badge: 'bg-green-100 text-green-700', label: 'Good' };
@@ -52,12 +59,15 @@ function JointList({ deviations }) {
 function Result() {
   const navigate = useNavigate();
   const { state } = useLocation();
-  const [activeCheckpoint, setActiveCheckpoint] = useState('trophy');
 
   const result = state?.result ?? FALLBACK;
   const { overall_score, sport_type, deviation_scores, coaching, overlay_path } = result;
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const sportLabel = sport_type === 'tennis_serve' ? 'Tennis' : 'Badminton';
+  const CHECKPOINTS = CHECKPOINTS_BY_SPORT[sport_type] ?? CHECKPOINTS_BY_SPORT.tennis_serve;
+
+  const defaultCheckpoint = sport_type === 'badminton' ? 'contact' : 'trophy';
+  const [activeCheckpoint, setActiveCheckpoint] = useState(defaultCheckpoint);
 
   const activeDeviations = checkpoints[activeCheckpoint]?.deviations ?? {};
 

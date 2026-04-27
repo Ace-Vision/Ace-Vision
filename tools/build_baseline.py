@@ -32,10 +32,13 @@ repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo_root))
 
 from ml import extractor, calculator
-from ml.scorer import _find_trophy_frame, _find_racket_drop_frame, _find_contact_frame
+from ml.scorer import (
+    _find_trophy_frame, _find_racket_drop_frame, _find_contact_frame,
+    _find_clear_contact_frame, _find_backswing_frame, _find_follow_through_frame,
+)
 
 
-def collect_checkpoint_angles(video_path: str) -> dict:
+def collect_checkpoint_angles(video_path: str, sport_type: str = "tennis_serve") -> dict:
     """
     Process one expert video and return the joint angles at each checkpoint.
 
@@ -63,29 +66,60 @@ def collect_checkpoint_angles(video_path: str) -> dict:
     keypoints_list = extractor.extract_keypoints(video_path)
     angles_list    = calculator.calculate_angles(keypoints_list)
 
-    # Step 3: detect the three checkpoints
-    trophy_frame      = _find_trophy_frame(keypoints_list)
-    racket_drop_frame = _find_racket_drop_frame(keypoints_list, after_frame=trophy_frame or 0)
-    contact_frame     = _find_contact_frame(angles_list, after_frame=racket_drop_frame or 0)
-
-    print(f"    trophy={trophy_frame}, racket_drop={racket_drop_frame}, contact={contact_frame}")
-
-    # Step 4: extract the angles at each checkpoint
+    # Step 3: detect checkpoints (sport-specific)
     def angles_at(frame_idx):
         if frame_idx is None:
             return None
         angles = angles_list[frame_idx] if frame_idx < len(angles_list) else {}
-        # Remove None values (joints that couldn't be measured)
-        return {k: v for k, v in angles.items() if v is not None}
+        return {k: round(v, 2) for k, v in angles.items() if v is not None}
 
-    return {
-        "trophy":      angles_at(trophy_frame),
-        "racket_drop": angles_at(racket_drop_frame),
-        "contact":     angles_at(contact_frame),
-    }
+    total_frames = len(keypoints_list)
+    print(f"    total frames : {total_frames}")
+
+    if sport_type == "badminton":
+        contact_frame        = _find_clear_contact_frame(keypoints_list)
+        backswing_frame      = _find_backswing_frame(
+            angles_list, before_frame=contact_frame or 0, keypoints_list=keypoints_list
+        )
+        follow_through_frame = _find_follow_through_frame(
+            keypoints_list, after_frame=contact_frame or 0
+        )
+        print(f"    backswing      : frame {backswing_frame}")
+        print(f"    contact        : frame {contact_frame}")
+        print(f"    follow_through : frame {follow_through_frame}")
+        result = {
+            "backswing":      angles_at(backswing_frame),
+            "contact":        angles_at(contact_frame),
+            "follow_through": angles_at(follow_through_frame),
+        }
+    else:
+        trophy_frame      = _find_trophy_frame(keypoints_list)
+        racket_drop_frame = _find_racket_drop_frame(keypoints_list, after_frame=trophy_frame or 0)
+        contact_frame     = _find_contact_frame(
+            angles_list, after_frame=racket_drop_frame or 0, keypoints_list=keypoints_list
+        )
+        print(f"    trophy       : frame {trophy_frame}")
+        print(f"    racket_drop  : frame {racket_drop_frame}")
+        print(f"    contact      : frame {contact_frame}")
+        result = {
+            "trophy":      angles_at(trophy_frame),
+            "racket_drop": angles_at(racket_drop_frame),
+            "contact":     angles_at(contact_frame),
+        }
+
+    # Print the extracted angles so the user can verify them
+    for cp, angles in result.items():
+        if angles:
+            print(f"\n    [{cp}]")
+            for joint, val in angles.items():
+                print(f"      {joint:<30} {val:.1f}°")
+        else:
+            print(f"\n    [{cp}]  ← not detected")
+
+    return result
 
 
-def build_baselines(videos_dir: str, output_path: str) -> None:
+def build_baselines(videos_dir: str, output_path: str, sport_type: str = "tennis_serve", single_file: str | None = None) -> None:
     """
     Process all .mp4 files in videos_dir, average angles at each checkpoint,
     and write the nested baseline JSON to output_path.
@@ -95,9 +129,12 @@ def build_baselines(videos_dir: str, output_path: str) -> None:
         output_path:  where to write the output JSON
     """
     # Find all video files in the directory (.mp4 and .avi both work)
-    video_files = []
-    for ext in ("*.mp4", "*.avi", "*.MP4", "*.AVI"):
-        video_files.extend(Path(videos_dir).glob(ext))
+    if single_file:
+        video_files = [Path(single_file)]
+    else:
+        video_files = []
+        for ext in ("*.mp4", "*.avi", "*.MP4", "*.AVI"):
+            video_files.extend(Path(videos_dir).glob(ext))
 
     if not video_files:
         print(f"No video files (.mp4 or .avi) found in {videos_dir}")
@@ -107,14 +144,15 @@ def build_baselines(videos_dir: str, output_path: str) -> None:
 
     # Accumulate angles per checkpoint per joint across all videos.
     # Structure: all_angles[checkpoint_name][joint_name] = [angle1, angle2, ...]
-    all_angles: dict[str, dict[str, list[float]]] = {
-        "trophy":      {},
-        "racket_drop": {},
-        "contact":     {},
-    }
+    checkpoint_keys = (
+        ["backswing", "contact", "follow_through"]
+        if sport_type == "badminton"
+        else ["trophy", "racket_drop", "contact"]
+    )
+    all_angles: dict[str, dict[str, list[float]]] = {k: {} for k in checkpoint_keys}
 
     for video_path in video_files:
-        result = collect_checkpoint_angles(str(video_path))
+        result = collect_checkpoint_angles(str(video_path), sport_type=sport_type)
 
         # Add each joint's angle to the accumulator list
         for checkpoint_name, angles in result.items():
@@ -165,12 +203,16 @@ def build_baselines(videos_dir: str, output_path: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build expert baseline JSON from a folder of serve videos"
+        description="Build expert baseline JSON from expert video(s)"
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--video",
+        help="Single expert video file (e.g. data/expert/clear.mp4)",
+    )
+    source.add_argument(
         "--videos_dir",
-        required=True,
-        help="Folder containing expert .mp4 videos",
+        help="Folder containing multiple expert .mp4 videos",
     )
     parser.add_argument(
         "--sport_type",
@@ -181,12 +223,19 @@ def main():
     parser.add_argument(
         "--output",
         required=True,
-        help="Output path for the baseline JSON (e.g. data/reference/tennis_baselines.json)",
+        help="Output path for the baseline JSON (e.g. data/reference/badminton_baselines.json)",
     )
     args = parser.parse_args()
 
-    print(f"Building {args.sport_type} baselines from: {args.videos_dir}\n")
-    build_baselines(args.videos_dir, args.output)
+    if args.video:
+        print(f"Building {args.sport_type} baselines from single video: {args.video}\n")
+        build_baselines(
+            str(Path(args.video).parent), args.output,
+            sport_type=args.sport_type, single_file=args.video,
+        )
+    else:
+        print(f"Building {args.sport_type} baselines from: {args.videos_dir}\n")
+        build_baselines(args.videos_dir, args.output, sport_type=args.sport_type)
 
 
 if __name__ == "__main__":
