@@ -1,17 +1,72 @@
 """
 backend/main.py — FastAPI entry point.
 
-Creates the FastAPI application instance and registers route handlers.
-
 Endpoints:
-- POST /analyse  — Upload a serve video, run the full ML pipeline, return
-                   overlay video + deviation scores JSON + session_id.
-- POST /coaching — Given a session_id and deviation scores, call the LLM
-                   and return structured coaching JSON (2 corrections + summary).
-
-Key responsibilities:
-- Initialise FastAPI app with CORS and metadata
-- Define request/response routes using Pydantic schemas
-- Handle video file upload and temporary file management
-- Return JSON responses and video file downloads
+- POST /analyse  — Upload a video file, run the full ML pipeline,
+                   return deviation scores + overall score + session_id.
 """
+
+import asyncio
+import os
+import shutil
+import tempfile
+
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+
+from backend.schemas import AnalyseResponse
+from backend import pipeline, llm
+
+app = FastAPI(title="Ace Vision API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/overlay/{session_id}")
+async def get_overlay(session_id: str):
+    path = os.path.join("uploads", f"{session_id}_overlay.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Overlay not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/analyse", response_model=AnalyseResponse)
+async def analyse(
+    file: UploadFile = File(...),
+    sport_type: str = Form(...),
+    skill_level: str = Form(...),
+):
+    valid_sports = ("badminton", "tennis_serve")
+    if sport_type not in valid_sports:
+        raise HTTPException(status_code=422, detail=f"sport_type must be one of {valid_sports}")
+
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = await asyncio.to_thread(pipeline.run_pipeline, tmp_path, sport_type, skill_level)
+    except Exception as exc:
+        os.unlink(tmp_path)
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    else:
+        os.unlink(tmp_path)
+
+    coaching = await asyncio.to_thread(llm.get_coaching, result["deviation_scores"], skill_level)
+
+    return AnalyseResponse(
+        session_id=result["session_id"],
+        deviation_scores=result["deviation_scores"],
+        overlay_path=result["overlay_path"],
+        sport_type=sport_type,
+        overall_score=result["overall_score"],
+        coaching=coaching,
+    )
