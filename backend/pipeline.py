@@ -22,7 +22,7 @@ import os
 import shutil
 import uuid
 
-from ml import extractor, calculator, scorer, renderer
+from ml import extractor, smoother, calculator, scorer, renderer
 
 # Maps each sport to its sample video folder.
 # We pick the first video file found in the folder so the filename doesn't matter.
@@ -62,11 +62,13 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
 
     # Step 1: Use the uploaded video directly
 
-    # Step 2: Extract pose keypoints from every frame in the video
+    # Step 1: Extract pose keypoints from every frame in the video
     keypoints_list = extractor.extract_keypoints(video_path)
 
-    # Step 2: Calculate joint angles for every frame
-    # (smoother and normaliser are skipped for now — not yet implemented)
+    # Step 2: Smooth keypoint coordinates to reduce MediaPipe jitter
+    keypoints_list = smoother.smooth_keypoints(keypoints_list)
+
+    # Step 3: Calculate joint angles from smoothed keypoints
     angles_list = calculator.calculate_angles(keypoints_list)
 
     # Step 4: Score the player's angles against the expert baselines for this sport.
