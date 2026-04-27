@@ -14,7 +14,11 @@
       "Bash(wmic process *)",
       "Bash(echo \"dummy\")",
       "Bash(curl -s -X POST http://localhost:8000/analyse -F \"file=@/tmp/test.webm\" -F \"sport_type=badminton\" -F \"skill_level=intermediate\")",
-      "Bash(C:/Users/cssky/AppData/Local/Programs/Python/Python313/python.exe -c ' *)"
+      "Bash(C:/Users/cssky/AppData/Local/Programs/Python/Python313/python.exe -c ' *)",
+      "Bash(xargs ls *)",
+      "Bash(python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(npm start *)",
+      "Bash(py -3.13 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload)"
     ]
   }
 }
