@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
 
 const recentItems = [
   { id: 1, code: 'BH', color: 'bg-purple-500', title: 'Backhand Drive',  sub: '2 days ago · Score 73', sport: 'badminton' },
@@ -20,6 +20,7 @@ function Home() {
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
+  const uploadInputRef = useRef(null);
 
   // stream을 video 엘리먼트에 연결 — cameraOpen 후 DOM이 마운트된 뒤 실행
   useEffect(() => {
@@ -150,9 +151,12 @@ function Home() {
           </p>
 
           {/* Upload Button */}
-          <label className={`mt-4 border-2 border-dashed border-purple-400 rounded-xl p-6 flex flex-col items-center transition-colors ${
-            loading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:border-purple-200'
-          }`}>
+          <div
+            onClick={() => !loading && uploadInputRef.current?.click()}
+            className={`mt-4 border-2 border-dashed border-purple-400 rounded-xl p-6 flex flex-col items-center transition-colors ${
+              loading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:border-purple-200'
+            }`}
+          >
             {loading ? (
               <>
                 <span className="text-3xl mb-2">⏳</span>
@@ -167,13 +171,13 @@ function Home() {
               </>
             )}
             <input
+              ref={uploadInputRef}
               type="file"
               accept="video/mp4,video/quicktime,video/webm"
               className="hidden"
-              disabled={loading}
               onChange={handleFile}
             />
-          </label>
+          </div>
 
           {/* Record Button */}
           {!loading && (

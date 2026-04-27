@@ -18,6 +18,8 @@ Key responsibilities:
 """
 
 import glob
+import os
+import shutil
 import uuid
 
 from ml import extractor, calculator, scorer, renderer
@@ -77,9 +79,15 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
 
     # Step 5: Render the overlay video with colour-coded skeleton.
     # Pass angles_list so the renderer can show live per-frame values in the HUD.
-    overlay_path = renderer.render_video(video_path, keypoints_list, deviation_scores, angles_list)
+    session_id = str(uuid.uuid4())
+    overlay_tmp = renderer.render_video(video_path, keypoints_list, deviation_scores, angles_list)
 
-    # Step 5: Compute overall score (100 = perfect, 0 = all joints at max deviation)
+    # Move overlay to persistent uploads directory so it can be served over HTTP.
+    os.makedirs("uploads", exist_ok=True)
+    overlay_dest = os.path.join("uploads", f"{session_id}_overlay.mp4")
+    shutil.move(overlay_tmp, overlay_dest)
+
+    # Step 6: Compute overall score (100 = perfect, 0 = all joints at max deviation)
     deviations = deviation_scores.get("deviations", {})
     if deviations:
         avg_severity = sum(d["severity_score"] for d in deviations.values()) / len(deviations)
@@ -87,12 +95,10 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
     else:
         overall_score = 0
 
-    session_id = str(uuid.uuid4())
-
     return {
         "session_id": session_id,
         "deviation_scores": deviation_scores,
-        "overlay_path": overlay_path,
+        "overlay_path": f"/overlay/{session_id}",
         "sport_type": sport_type,
         "overall_score": overall_score,
     }

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 
+const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
 const FALLBACK = {
   overall_score: 0,
   sport_type: 'unknown',
@@ -53,7 +55,7 @@ function Result() {
   const [activeCheckpoint, setActiveCheckpoint] = useState('trophy');
 
   const result = state?.result ?? FALLBACK;
-  const { overall_score, sport_type, deviation_scores, coaching } = result;
+  const { overall_score, sport_type, deviation_scores, coaching, overlay_path } = result;
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const sportLabel = sport_type === 'tennis_serve' ? 'Tennis' : 'Badminton';
 
@@ -72,6 +74,18 @@ function Result() {
       </div>
 
       <div className="px-6 pt-5 space-y-5">
+
+        {/* Overlay video */}
+        {overlay_path && (
+          <div className="rounded-2xl overflow-hidden bg-black">
+            <video
+              src={`${API_BASE}${overlay_path}`}
+              controls
+              playsInline
+              className="w-full"
+            />
+          </div>
+        )}
 
         {/* Score */}
         <div className="bg-purple-700 rounded-2xl p-5 flex items-center justify-between">

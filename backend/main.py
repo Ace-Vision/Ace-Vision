@@ -13,6 +13,7 @@ import tempfile
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from backend.schemas import AnalyseResponse
 from backend import pipeline, llm
@@ -25,6 +26,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/overlay/{session_id}")
+async def get_overlay(session_id: str):
+    path = os.path.join("uploads", f"{session_id}_overlay.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Overlay not found")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.post("/analyse", response_model=AnalyseResponse)

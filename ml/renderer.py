@@ -22,6 +22,7 @@ Key responsibilities:
 - Encode output as an MP4 video file
 """
 
+import os
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -68,7 +69,8 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Output video: enforce H.264 in MP4 for browser/Streamlit compatibility.
-    output_path = video_path.replace('.mp4', '_overlay.mp4')
+    base, _ = os.path.splitext(video_path)
+    output_path = base + '_overlay.mp4'
     preferred_codecs = ["avc1", "H264", "X264"]
     out = None
     for codec in preferred_codecs:
