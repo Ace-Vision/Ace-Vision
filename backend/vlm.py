@@ -7,11 +7,14 @@ from google import genai
 # Usually it takes a few attempts to generate since it is often busy.
 
 # 1. Input API key and choose video path
-API_KEY = "AIzaSyDkFUqfvdTzWjDFMMogJnWmtlXAMF4fxME" 
+API_KEY = "API_KEY_HERE" 
 client = genai.Client(api_key=API_KEY)
 
+video_path = "VIDEO_PATH_HERE.mp4"
 
-def analyze_video(video_path: str):
+
+
+def analyze_video(video_path: str, prompt: str):
     # 2 Upload video to Gemini for processing
     print(f"Uploading: {video_path}")
     video_file = client.files.upload(file=video_path)
@@ -40,7 +43,7 @@ def analyze_video(video_path: str):
                 model="gemini-2.5-flash",
                 contents=[
                     video_file, 
-                    "Describe the sequence of events in this video in detail."
+                    prompt
                 ]
             )
             
@@ -58,18 +61,25 @@ def analyze_video(video_path: str):
             # Clean up even on failure
             client.files.delete(name=video_file.name)
             raise e
+        
 
+def get_coaching(video_path: str, skill_level: str = "intermediate") -> dict | None:
+    """
+    Ask the local VLM for coaching advice.
 
-if __name__ == "__main__":
-    test_path = r"C:\Users\ldahl\Videos\WIN_20260429_16_56_29_Pro.mp4"
+    Returns {"advice": "<text>"} or None if VLM is unreachable.
+
+    """
+
+    prompt =  f"""You are an expert sports biomechanics coach.
+        The player's skill level is: {skill_level}.Give 2-3 specific 
+        coaching corrections targeting the joints with the highest severity scores.
+        For each correction: state which checkpoint it affects, 
+        what the problem is biomechanically, and a concrete drill to fix it.
+        Be concise and practical. Focus on actionable 
+        advice.
+        
+        Maximum 100 words."""
     
-    try:
-        description = analyze_video(test_path)
-        print("\n" + "="*50)
-        print("ACE-VISION BACKEND OUTPUT:")
-        print("="*50)
-        print(description)
-        print("="*50)
-            
-    except Exception as e:
-        print(f"\n Final Error: {e}")
+    print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
+    print(analyze_video(video_path, prompt))
