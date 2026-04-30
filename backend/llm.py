@@ -7,7 +7,7 @@ to a locally running Ollama model, returning plain-text coaching advice.
 
 import os
 import requests
-from vector_db import VectorDatabase, VectorEmbeddingModel
+from backend.vector_db import VectorDatabase, VectorEmbeddingModel
 
 embed_model = VectorEmbeddingModel()
 vector_db = VectorDatabase(embedding_model=embed_model)
@@ -80,3 +80,4 @@ Include context as needed. Context:
         return {"advice": advice} if advice else None
     except (requests.RequestException, KeyError, ValueError):
         return None
+    

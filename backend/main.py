@@ -10,6 +10,10 @@ import asyncio
 import os
 import shutil
 import tempfile
+import sys
+
+# Ensure project root is in Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
