@@ -1,7 +1,7 @@
 import os
 import time
 from google import genai
-
+import requests
 
 """"
 Using Gemini API for video analysis. This version uses gemini-2.5-flash,
@@ -10,8 +10,10 @@ Usually it takes a few attempts to generate since it is often busy.
 """
 
 # 1. Input API key and choose video path
-API_KEY = "API_KEY_HERE" 
-video_path = "video.mp4"  # Replace with your video file path
+#API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk" 
+#video_path = r"C:\Users\ldahl\Downloads\user_clear.mp4"
+#video_path_0 = r"C:\Users\ldahl\Videos\WIN_20260429_16_56_29_Pro.mp4"
+
 class gemini_model:
     """
     VLM module to get coaching advice from a video using a Gemini Video Model.
@@ -27,8 +29,23 @@ class gemini_model:
     Also, this implementation does not currently integrate with the VectorDatabase for contextual search,
     but that could be added in future iterations by including relevant text from the database in the prompt.
     """
+
     def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key)
+
+    def _format_checkpoint(self, name: str, data: dict | None) -> str:
+        if data is None:
+            return f"=== {name.upper()} ===\n  (not detected in video)\n"
+
+        lines = [f"=== {name.upper()} (frame {data['frame']}) ==="]
+        for joint, info in data["deviations"].items():
+            label = joint.replace("_", " ")
+            lines.append(
+                f"  {label}: {info['angle']:.1f}° "
+                f"({info['deviation_deg']:.1f}° off, {info['direction'].replace('_', ' ')}, "
+                f"severity {info['severity_score']:.2f})"
+            )
+        return "\n".join(lines)
 
     def analyze_video(self,video_path: str, prompt: str) -> str:
         # 2 Upload video to Gemini for processing
@@ -83,33 +100,44 @@ class gemini_model:
                 raise e
             
 
-    def get_coaching(self, video_path: str, skill_level: str = "intermediate") -> dict | None:
-        """
-        Ask the local VLM for coaching advice.
+    def get_coaching(self, deviation_scores: dict, video_path: str, 
+                     skill_level: str = "intermediate") -> dict | None:
+        
+        checkpoints = deviation_scores.get("checkpoints", {})
 
-        Returns {"advice": "<text>"} or None if VLM is unreachable.
+        prompt_body = "\n\n".join([
+            self._format_checkpoint("Trophy Position", checkpoints.get("trophy")),
+            self._format_checkpoint("Racket Drop",     checkpoints.get("racket_drop")),
+            self._format_checkpoint("Contact",         checkpoints.get("contact")),
+        ])
 
-        """
-
-        prompt =  f"""You are an expert sports biomechanics coach.
-            The player's skill level is: {skill_level}.Give 2-3 specific 
-            coaching corrections targeting the joints with the highest severity scores.
-            For each correction: state which checkpoint it affects, 
-            what the problem is biomechanically, and a concrete drill to fix it.
+        prompt =  f"""You are an expert badminton/tennis coach.
+            The player's skill level is: {skill_level}. Use joint data provided
+            by {prompt_body}. (Joint deviation scores at 3 key moments of a serve.
+            severity_score is 0.0 (perfect) to 1.0 (maximum deviation)). Give 1 specific 
+            coaching correction. Explain what was done well and also what could be improved. 
             Be concise and practical. Focus on actionable 
             advice.
             
             Maximum 100 words.
             
-            If the video is not clear enough or is not a video of tennis or badminton,
-            say you cannot analyze the video.
+            If the video is not clear enough or is not tennis/badminton, DO NOT DESCRIBE THE VIDEO. 
+            Instead, say "Video unclear, unable to provide advice."
             """
         
-        print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
-        print(self.analyze_video(video_path, prompt))
+        
+        try:
+            response = self.analyze_video(video_path, prompt)
+            response.raise_for_status()
+            advice = response.json().get("response", "").strip()
+            return {"advice": advice} if advice else None
+        except (requests.RequestException, KeyError, ValueError):
+            return None
+    
+        #print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
+        #print(self.analyze_video(video_path, prompt))
 
 """
-Example usage:
 my_vlm = gemini_model(API_KEY)
-my_vlm.get_coaching(video_path, skill_level="beginner")
+my_vlm.get_coaching(video_path, skill_level="intermediate")
 """
