@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from backend.schemas import AnalyseResponse
 from backend import pipeline, vlm
 
-API_KEY = "API_KEY_HERE"
+API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk"
 gemini = vlm.gemini_model(API_KEY)
 
 app = FastAPI(title="Ace Vision API")
@@ -67,7 +67,8 @@ async def analyse(
     else:
         os.unlink(tmp_path)
 
-    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], skill_level)
+    actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
+    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level)
 
     return AnalyseResponse(
         session_id=result["session_id"],

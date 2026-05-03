@@ -127,11 +127,9 @@ class gemini_model:
         
         
         try:
-            response = self.analyze_video(video_path, prompt)
-            response.raise_for_status()
-            advice = response.json().get("response", "").strip()
-            return {"advice": advice} if advice else None
-        except (requests.RequestException, KeyError, ValueError):
+            advice = self.analyze_video(video_path, prompt)
+            return {"advice": advice.strip()} if advice else None
+        except Exception:
             return None
     
         #print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
