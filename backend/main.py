@@ -10,13 +10,20 @@ import asyncio
 import os
 import shutil
 import tempfile
+import sys
+
+# Ensure project root is in Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from backend.schemas import AnalyseResponse
-from backend import pipeline, llm
+from backend import pipeline, vlm
+
+API_KEY = "API_KEY_HERE"
+gemini = vlm.gemini_model(API_KEY)
 
 app = FastAPI(title="Ace Vision API")
 
@@ -60,7 +67,7 @@ async def analyse(
     else:
         os.unlink(tmp_path)
 
-    coaching = await asyncio.to_thread(llm.get_coaching, result["deviation_scores"], skill_level)
+    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], skill_level)
 
     return AnalyseResponse(
         session_id=result["session_id"],

@@ -7,6 +7,10 @@ to a locally running Ollama model, returning plain-text coaching advice.
 
 import os
 import requests
+from backend.vector_db import VectorDatabase, VectorEmbeddingModel
+
+embed_model = VectorEmbeddingModel()
+vector_db = VectorDatabase(embedding_model=embed_model)
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3")
@@ -41,6 +45,16 @@ def get_coaching(deviation_scores: dict, skill_level: str = "intermediate") -> d
         _format_checkpoint("Contact",         checkpoints.get("contact")),
     ])
 
+    search_results = vector_db.search(prompt_body, k=2)
+
+    # Extract text from search results and include source information
+    context_parts = []
+    for result in search_results:
+        source = result['metadata'].get('filename', 'Unknown source')
+        context_parts.append(f"From {source}: {result['text']}")
+
+    context = "\n\n".join(context_parts)
+
     prompt = f"""You are an expert sports biomechanics coach.
 Below are joint deviation scores at 3 key moments of a serve.
 severity_score is 0.0 (perfect) to 1.0 (maximum deviation).
@@ -50,7 +64,10 @@ The player's skill level is: {skill_level}.
 
 Give 2-3 specific coaching corrections targeting the joints with the highest severity scores.
 For each correction: state which checkpoint it affects, what the problem is biomechanically, and a concrete drill to fix it.
-Be concise and practical. Do not repeat the numbers back — focus on actionable advice."""
+Be concise and practical. Do not repeat the numbers back — focus on actionable advice.
+Include context as needed. Context:
+{context}"""
+
 
     try:
         response = requests.post(
@@ -63,3 +80,4 @@ Be concise and practical. Do not repeat the numbers back — focus on actionable
         return {"advice": advice} if advice else None
     except (requests.RequestException, KeyError, ValueError):
         return None
+    
