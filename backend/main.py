@@ -24,7 +24,9 @@ from backend.schemas import AnalyseResponse
 from backend import pipeline, vlm
 from ml import renderer
 
-API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk"
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 gemini = vlm.gemini_model(API_KEY)
 
 app = FastAPI(title="Ace Vision API")

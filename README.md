@@ -1,97 +1,95 @@
 # Ace Vision
 
-AI-powered tennis serve / badminton analysis. Upload a video, get biomechanics feedback and coaching advice.
+AI-powered tennis serve / badminton analysis. Upload or record a video, get biomechanics feedback and Gemini coaching advice.
 
 ## How it works
 
 ```
-Video in → Pose extraction → Joint angles → Deviation overlay → Coaching advice
+Video in → Pose extraction → Joint angles → Deviation scoring → Overlay rendering → Gemini coaching
 ```
 
 1. **Pose extraction** — MediaPipe detects 33 body landmarks per frame
-2. **Smoothing & normalisation** — Gaussian filter removes jitter; hip-centred scaling makes results size-independent
-3. **Angle calculation** — Measures 9 serve-specific joint angles (elbows, shoulders, knees, trunk, hips, wrist)
-4. **Deviation scoring** — Compares your angles against expert baselines and scores severity
-5. **Overlay rendering** — Draws a colour-coded skeleton on your video (green/amber/red by severity)
-6. **Coaching** — Local Ollama LLM analyses deviations and returns targeted corrections (optional — works without it)
+2. **Angle calculation** — Measures 9 serve-specific joint angles (elbows, shoulders, knees, trunk, hips, wrist)
+3. **Deviation scoring** — Compares angles against expert baselines and scores severity
+4. **Overlay rendering** — Draws a colour-coded skeleton on your video (green/amber/red by severity)
+5. **Coaching** — Gemini 2.5 Flash analyses the overlay video + deviation data and returns targeted feedback, highlighting the worst joint
 
 ## Prerequisites
 
 - Python 3.10+
 - Node.js 18+
-- [Ollama](https://ollama.com) *(optional — coaching feedback only)*
+- A [Gemini API key](https://aistudio.google.com/app/apikey) (free tier works)
 
 ## Setup
 
 ```bash
 # 1. Clone and create a virtual environment
 git clone <repo-url> && cd ace-vision
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 
 # 2. Install Python dependencies
 pip install -r requirements.txt
 
 # 3. Install frontend dependencies
 cd frontend && npm install && cd ..
+
+# 4. Set your Gemini API key
+cp .env.example .env
+# Edit .env and set GEMINI_API_KEY=your_key_here
 ```
 
 ## Running the app
 
-Open two terminal tabs from the project root.
+Build the React frontend once, then start the backend — everything runs on a single port.
 
-**Terminal 1 — backend:**
 ```bash
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-uvicorn backend.main:app --reload
+# Build frontend (only needed once, or after frontend changes)
+cd frontend && npm run build && cd ..
+
+# Start the server
+source venv/bin/activate
+GEMINI_API_KEY=your_key_here uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2 — frontend:**
+Open **http://localhost:8000** in your browser.
+
+> Tip: export GEMINI_API_KEY in your shell profile so you don't need to prefix every command.
+
+## Mobile access (same Wi-Fi)
+
+To use the app on your phone (required for camera recording):
+
 ```bash
-cd frontend && npm start
+# Install ngrok
+brew install ngrok/ngrok/ngrok
+ngrok config add-authtoken <your_ngrok_token>
+
+# Start the server as above, then in a separate terminal:
+ngrok http 8000
 ```
 
-Then open http://localhost:3000 in your browser.
-The API is available at http://localhost:8000 (docs at http://localhost:8000/docs).
-
-> **Note:** You'll need your own `.mp4` video file to test the app. Sample videos are gitignored and not included in the repo. Any tennis serve or badminton smash clip works — just upload it via the UI.
-
-## Coaching feedback (optional)
-
-Coaching is powered by a local [Ollama](https://ollama.com) model. If Ollama is not running, the analysis still works — coaching advice is simply omitted.
-
-To enable it:
-```bash
-# Install Ollama from https://ollama.com, then:
-ollama pull gemma3
-ollama serve
-```
-
-You can override the model via environment variables (see `.env.example`).
+Open the `https://...ngrok-free.app` URL on your phone.
 
 ## Project structure
 
 ```
 ace-vision/
 ├── ml/
-│   ├── extractor.py          # MediaPipe pose extraction
-│   ├── smoother.py           # Gaussian smoothing on keypoints
-│   ├── normaliser.py         # Hip-centred, scale-free normalisation
-│   ├── calculator.py         # Joint angle computation
-│   ├── scorer.py             # Deviation scoring vs expert baselines
-│   └── renderer.py           # Skeleton overlay + colour-coded joints
+│   ├── extractor.py      # MediaPipe pose extraction
+│   ├── calculator.py     # Joint angle computation
+│   ├── scorer.py         # Deviation scoring vs expert baselines
+│   └── renderer.py       # Skeleton overlay + colour-coded joints
 ├── backend/
-│   ├── main.py               # FastAPI routes
-│   ├── pipeline.py           # Chains ml/ modules end-to-end
-│   ├── llm.py                # Ollama coaching feedback (optional)
-│   ├── schemas.py            # Pydantic models
-│   └── db.py                 # SQLAlchemy models (not yet wired up)
-├── frontend/                 # React app
+│   ├── main.py           # FastAPI routes + React static serving
+│   ├── pipeline.py       # Chains ml/ modules end-to-end
+│   ├── vlm.py            # Gemini coaching (structured output)
+│   └── schemas.py        # Pydantic models
+├── frontend/             # React app (build output gitignored)
 ├── data/
-│   ├── reference/
-│   │   └── expert_baselines.json
-│   └── samples/              # Test videos (gitignored)
-├── tests/
+│   └── reference/        # Expert baseline JSON files
+├── models/               # MediaPipe pose model
+├── uploads/              # Generated overlay videos (gitignored)
 ├── .env.example
 └── requirements.txt
 ```
@@ -102,28 +100,19 @@ ace-vision/
 
 Upload a serve video for analysis.
 
-- **Input:** video file (mp4), `sport_type` (`tennis_serve` or `badminton`), `skill_level` (string)
-- **Returns:** overlay video path, deviation scores JSON, `session_id`, `overall_score`, `coaching`
+- **Input:** video file (mp4/mov), `sport_type` (`tennis_serve` or `badminton`), `skill_level` (string)
+- **Returns:** overlay video path, deviation scores, `session_id`, `overall_score`, `coaching`
 
-## Joints analysed
+### `GET /overlay/{session_id}`
 
-| Joint                    | Keypoints                                  |
-| ------------------------ | ------------------------------------------ |
-| Right elbow flexion      | right_shoulder → right_elbow → right_wrist |
-| Left elbow flexion       | left_shoulder → left_elbow → left_wrist    |
-| Right shoulder abduction | right_elbow → right_shoulder → right_hip   |
-| Left shoulder abduction  | left_elbow → left_shoulder → left_hip      |
-| Right knee flexion       | right_hip → right_knee → right_ankle       |
-| Left knee flexion        | left_hip → left_knee → left_ankle          |
-| Trunk lateral tilt       | left_shoulder → mid_spine → right_shoulder |
-| Hip-shoulder separation  | left_hip → right_hip → right_shoulder      |
-| Wrist extension          | right_elbow → right_wrist → right_index    |
+Returns the rendered overlay MP4 for a given session.
 
 ## Scoring
 
 ```
 deviation_deg   = abs(player_angle - expert_mean)
 severity_score  = min(deviation_deg / (2 * expert_std), 1.0)
+overall_score   = round((1 - mean_severity) * 100)
 ```
 
 Overlay colours: **green** (< 0.3) · **amber** (0.3–0.6) · **red** (> 0.6)
@@ -133,8 +122,8 @@ Overlay colours: **green** (< 0.3) · **amber** (0.3–0.6) · **red** (> 0.6)
 - **Pose:** MediaPipe
 - **CV / overlay:** OpenCV
 - **Backend:** FastAPI
-- **Frontend:** React
-- **Coaching (optional):** Ollama (gemma3)
+- **Frontend:** React + Tailwind
+- **Coaching:** Gemini 2.5 Flash (`google-genai`)
 
 ## Running tests
 
