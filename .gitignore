@@ -15,10 +15,17 @@ venv/
 
 # Node
 node_modules/
+frontend/build/
+
+# Env
+.env
 
 # IDE
 .vscode/
 .idea/
+
+# Claude Code
+.claude/
 
 # OS
 .DS_Store

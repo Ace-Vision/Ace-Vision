@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 const drills = [
   {
     id: 1, sport: 'Badminton', title: 'Elbow Angle Drill',
@@ -21,32 +23,50 @@ const drills = [
   },
 ];
 
-function levelColor(lvl) {
-  return lvl === 'Beginner' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700';
-}
-
 function Drills() {
-  return (
-    <div className="min-h-screen bg-gray-50 pb-24">
+  const [filter, setFilter] = useState('All');
+  const filtered = filter === 'All' ? drills : drills.filter(d => d.sport === filter);
 
-      {/* Header */}
-      <div className="bg-white px-6 pt-14 pb-4 border-b border-gray-100">
-        <h1 className="text-xl font-semibold text-gray-900">Drills</h1>
-        <p className="text-sm text-gray-400 mt-1">Practice exercises for improvement</p>
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] pb-28">
+
+      <div className="px-5 pt-16 pb-7">
+        <p className="text-[11px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
+        <h1 className="text-3xl font-bold text-white">Drills.</h1>
       </div>
 
-      <div className="px-6 pt-5 space-y-3">
-        {drills.map(d => (
-          <div key={d.id} className="bg-white rounded-xl p-4 border border-gray-100">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-sm">{d.sport === 'Badminton' ? '🏸' : '🎾'}</span>
-              <span className="text-sm font-medium text-gray-900 flex-1">{d.title}</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${levelColor(d.level)}`}>
+      {/* Filter */}
+      <div className="px-5 mb-5 flex gap-2">
+        {['All', 'Badminton', 'Tennis'].map(f => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              filter === f
+                ? 'bg-[#C8FF57] text-black'
+                : 'bg-[#111] text-[#555] border border-[#1e1e1e]'
+            }`}
+          >
+            {f}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-5 space-y-2">
+        {filtered.map(d => (
+          <div key={d.id} className="card-sm px-4 py-4 hover:bg-[#161616] transition-colors cursor-pointer">
+            <div className="flex items-start justify-between gap-3 mb-1.5">
+              <p className="text-sm font-bold text-white">{d.title}</p>
+              <span className={`text-[10px] font-bold uppercase tracking-wider shrink-0 mt-0.5 ${
+                d.level === 'Beginner' ? 'text-[#C8FF57]' : 'text-amber-400'
+              }`}>
                 {d.level}
               </span>
             </div>
-            <p className="text-xs text-gray-500 mb-2">{d.desc}</p>
-            <p className="text-xs text-gray-400">⏱ {d.duration}</p>
+            <p className="text-xs text-[#555] leading-relaxed mb-3">{d.desc}</p>
+            <p className="text-[10px] font-semibold text-[#333] uppercase tracking-wider">
+              {d.sport} · {d.duration}
+            </p>
           </div>
         ))}
       </div>

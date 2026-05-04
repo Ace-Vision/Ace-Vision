@@ -45,7 +45,7 @@ landmark_names = [landmark.name.lower() for landmark in vision.PoseLandmark]
 index_to_name = {i: name for i, name in enumerate(landmark_names)}
 
 
-def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None) -> str:
+def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None, highlight_joint: str | None = None) -> str:
     """
     Render video with pose skeleton overlay and deviation feedback.
 
@@ -110,19 +110,13 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
 
         # Draw skeleton
         if kp:
-            # Draw connections
             for start_idx, end_idx in POSE_CONNECTIONS:
                 start_name = index_to_name.get(start_idx)
                 end_name = index_to_name.get(end_idx)
                 if start_name in kp and end_name in kp:
                     start_point = (int(kp[start_name]['x'] * width), int(kp[start_name]['y'] * height))
                     end_point = (int(kp[end_name]['x'] * width), int(kp[end_name]['y'] * height))
-                    cv2.line(frame, start_point, end_point, (255, 255, 255), 2)
-
-            # Draw landmarks
-            for landmark_name, data in kp.items():
-                x, y = int(data['x'] * width), int(data['y'] * height)
-                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)  # Green dots
+                    cv2.line(frame, start_point, end_point, (220, 220, 220), 4, cv2.LINE_AA)
 
         # Build per-frame deviations.
         # If we have live angles for this frame, compute severity on the fly.
@@ -157,24 +151,30 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
             else:
                 return (244, 67, 54)   # Red
 
-        # Draw deviation overlays — coloured dots, live per frame
+        # Draw deviation overlays — filled dots with white border
         for joint, landmark_name in joint_landmarks.items():
             if landmark_name in kp:
                 x, y = int(kp[landmark_name]['x'] * width), int(kp[landmark_name]['y'] * height)
                 severity, _ = get_live_severity(joint)
                 if severity is not None:
-                    cv2.circle(frame, (x, y), 10, severity_color(severity), -1)
+                    color = severity_color(severity)
+                    cv2.circle(frame, (x, y), 13, (255, 255, 255), -1, cv2.LINE_AA)
+                    cv2.circle(frame, (x, y), 10, color, -1, cv2.LINE_AA)
 
-        # Draw HUD — live angle values update every frame
-        y_offset = 30
-        for i, (joint, landmark_name) in enumerate(joint_landmarks.items()):
-            severity, live_angle = get_live_severity(joint)
-            if severity is None:
-                continue
-            color = severity_color(severity)
-            joint_label = joint.replace('_', ' ')
-            text = f"{joint_label}: {live_angle:.1f}deg"
-            cv2.putText(frame, text, (10, y_offset + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+        # Highlight the worst joint — semi-transparent filled glow
+        if highlight_joint and kp and highlight_joint in kp:
+            hx = int(kp[highlight_joint]['x'] * width)
+            hy = int(kp[highlight_joint]['y'] * height)
+            pulse = int(6 * abs(np.sin(frame_num * 0.25)))
+            # Outer glow (semi-transparent)
+            overlay = frame.copy()
+            cv2.circle(overlay, (hx, hy), 38 + pulse, (0, 0, 230), -1, cv2.LINE_AA)
+            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+            # Inner solid fill
+            cv2.circle(frame, (hx, hy), 18, (0, 0, 230), -1, cv2.LINE_AA)
+            # White border
+            cv2.circle(frame, (hx, hy), 18, (255, 255, 255), 2, cv2.LINE_AA)
 
         out.write(frame)
         frame_num += 1

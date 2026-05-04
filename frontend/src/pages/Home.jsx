@@ -1,20 +1,114 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ReactDOM from 'react-dom';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.REACT_APP_API_URL || '';
 
-const recentItems = [
-  { id: 1, code: 'BH', color: 'bg-purple-500', title: 'Backhand Drive',  sub: '2 days ago · Score 73', sport: 'badminton' },
-  { id: 2, code: 'SV', color: 'bg-teal-600',   title: 'Tennis Serve',    sub: '5 days ago · Score 61', sport: 'tennis'    },
-];
+// Camera modal rendered via portal to escape overflow container
+function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
+  return ReactDOM.createPortal(
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 99999,
+        background: '#000', display: 'flex', flexDirection: 'column',
+      }}
+    >
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{ width: '100%', height: 'calc(100dvh - 160px)', objectFit: 'cover', flexShrink: 0 }}
+      />
+      <div
+        style={{
+          height: '160px',
+          flexShrink: 0,
+          background: '#000',
+          borderTop: '1px solid #1e1e1e',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '40px',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+      >
+        {!recording ? (
+          <>
+            <button
+              onClick={onClose}
+              style={{
+                padding: '10px 24px',
+                borderRadius: '999px',
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: '#fff',
+                fontSize: '14px',
+                fontWeight: 600,
+                fontFamily: 'DM Sans, sans-serif',
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onStart}
+              style={{
+                width: 72, height: 72,
+                borderRadius: '50%',
+                background: '#ef4444',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <span style={{ width: 20, height: 20, borderRadius: '50%', background: '#fff' }} />
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                width: 10, height: 10, borderRadius: '50%',
+                background: '#ef4444', animation: 'pulse 1s ease-in-out infinite',
+              }} />
+              <span style={{ color: '#f87171', fontSize: 14, fontWeight: 600, fontFamily: 'DM Sans, sans-serif' }}>
+                Recording
+              </span>
+            </div>
+            <button
+              onClick={onStop}
+              style={{
+                width: 72, height: 72,
+                borderRadius: '50%',
+                background: '#dc2626',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <span style={{ width: 20, height: 20, borderRadius: 4, background: '#fff' }} />
+            </button>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 function Home() {
   const navigate = useNavigate();
-  const [sport, setSport] = useState('badminton');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  // step: 'sport' | 'action' | 'loading'
+  const [step, setStep] = useState('sport');
+  const [sport, setSport] = useState(null);
   const [recording, setRecording] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [error, setError] = useState(null);
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -22,44 +116,36 @@ function Home() {
   const streamRef = useRef(null);
   const uploadInputRef = useRef(null);
 
-  // stream을 video 엘리먼트에 연결 — cameraOpen 후 DOM이 마운트된 뒤 실행
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
     }
   }, [cameraOpen]);
 
-  async function handleFile(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    await uploadFile(file);
+  function selectSport(s) {
+    setSport(s);
+    setStep('action');
   }
 
   async function uploadFile(file) {
-    setLoading(true);
+    setCameraOpen(false);
+    setStep('loading');
     setError(null);
-
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('sport_type', sport);
       formData.append('skill_level', 'intermediate');
-
-      const res = await fetch(`${API_BASE}/analyse`, {
-        method: 'POST',
-        body: formData,
-      });
-
+      const res = await fetch(`${API_BASE}/analyse`, { method: 'POST', body: formData });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
-
       const result = await res.json();
-      navigate('/result', { state: { result, sport, skill: 'intermediate' } });
+      navigate('/result', { state: { result, sport } });
     } catch (err) {
       setError(err.message);
-      setLoading(false);
+      setStep('action');
     }
   }
 
@@ -83,14 +169,14 @@ function Home() {
       : 'video/webm';
     const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
     const recorder = new MediaRecorder(streamRef.current, { mimeType });
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     recorder.onstop = async () => {
       const blob = new Blob(chunksRef.current, { type: mimeType });
-      const file = new File([blob], `recording.${ext}`, { type: mimeType });
-      closeCamera();
-      await uploadFile(file);
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      setCameraOpen(false);
+      setRecording(false);
+      await uploadFile(new File([blob], `recording.${ext}`, { type: mimeType }));
     };
     recorder.start();
     mediaRecorderRef.current = recorder;
@@ -99,7 +185,6 @@ function Home() {
 
   function stopRecording() {
     mediaRecorderRef.current?.stop();
-    setRecording(false);
   }
 
   function closeCamera() {
@@ -109,156 +194,136 @@ function Home() {
     setRecording(false);
   }
 
-  return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-
-      {/* Header */}
-      <div className="bg-white px-6 pt-14 pb-4 border-b border-gray-100 text-center">
-        <h1 className="text-2xl font-semibold text-gray-900">Ace Vision</h1>
-        <p className="text-sm text-gray-400 mt-1">Badminton · Tennis</p>
-      </div>
-
-      {/* Sport Selector */}
-      <div className="flex justify-center gap-4 px-6 py-4">
-        <button
-          onClick={() => setSport('badminton')}
-          className={`text-sm font-medium px-4 py-1.5 rounded-full transition-colors ${
-            sport === 'badminton'
-              ? 'bg-purple-600 text-white'
-              : 'bg-gray-100 text-gray-500 hover:bg-purple-100 hover:text-purple-700'
-          }`}
-        >
-          🏸 Badminton
-        </button>
-        <button
-          onClick={() => setSport('tennis_serve')}
-          className={`text-sm font-medium px-4 py-1.5 rounded-full transition-colors ${
-            sport === 'tennis_serve'
-              ? 'bg-purple-600 text-white'
-              : 'bg-gray-100 text-gray-500 hover:bg-purple-100 hover:text-purple-700'
-          }`}
-        >
-          🎾 Tennis
-        </button>
-      </div>
-
-      {/* Upload Card */}
-      <div className="px-6">
-        <div className="bg-purple-700 rounded-2xl p-5">
-          <h2 className="text-white font-medium text-base">Analyze My Swing</h2>
-          <p className="text-purple-200 text-sm mt-1">
-            Upload your video and AI will compare it with pros
-          </p>
-
-          {/* Upload Button */}
+  // ── Loading screen ──────────────────────────────────────────
+  if (step === 'loading') {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-8">
+        <div className="flex flex-col items-center">
+          <h1
+            className="text-[44px] font-bold text-white leading-none"
+            style={{ letterSpacing: '-0.03em' }}
+          >
+            ACE
+          </h1>
+          <h1
+            className="text-[44px] font-bold leading-none"
+            style={{ letterSpacing: '-0.03em', color: '#C8FF57' }}
+          >
+            VISION
+          </h1>
+        </div>
+        <div className="flex flex-col items-center gap-3">
           <div
-            onClick={() => !loading && uploadInputRef.current?.click()}
-            className={`mt-4 border-2 border-dashed border-purple-400 rounded-xl p-6 flex flex-col items-center transition-colors ${
-              loading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:border-purple-200'
-            }`}
-          >
-            {loading ? (
-              <>
-                <span className="text-3xl mb-2">⏳</span>
-                <span className="text-white text-sm font-medium">Analysing...</span>
-                <span className="text-purple-300 text-xs mt-1">This may take a moment</span>
-              </>
-            ) : (
-              <>
-                <span className="text-3xl mb-2">⬆️</span>
-                <span className="text-white text-sm font-medium">Upload Video</span>
-                <span className="text-purple-300 text-xs mt-1">MP4 · MOV · Max 200MB</span>
-              </>
-            )}
-            <input
-              ref={uploadInputRef}
-              type="file"
-              accept="video/mp4,video/quicktime,video/webm"
-              className="hidden"
-              onChange={handleFile}
-            />
-          </div>
-
-          {/* Record Button */}
-          {!loading && (
-            <button
-              onClick={openCamera}
-              className="mt-3 w-full bg-purple-500 hover:bg-purple-400 text-white text-sm font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors"
-            >
-              <span>🎥</span> Record Video
-            </button>
-          )}
-        </div>
-
-        {error && (
-          <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        )}
-      </div>
-
-      {/* Camera Modal */}
-      {cameraOpen && (
-        <div className="fixed inset-0 bg-black z-[100] flex flex-col">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="flex-1 w-full object-cover"
+            className="w-10 h-10 rounded-full border-2 border-white/10 border-t-[#C8FF57]"
+            style={{ animation: 'spin 1s linear infinite' }}
           />
-          <div className="bg-black px-6 pt-6 pb-12 flex items-center justify-center gap-6">
-            {!recording ? (
-              <>
-                <button
-                  onClick={closeCamera}
-                  className="px-5 py-2.5 rounded-full bg-gray-700 text-white text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={startRecording}
-                  className="w-20 h-20 rounded-full bg-red-500 hover:bg-red-400 flex items-center justify-center shadow-lg"
-                >
-                  <span className="w-6 h-6 rounded-full bg-white" />
-                </button>
-              </>
-            ) : (
-              <>
-                <span className="text-red-400 text-sm animate-pulse">● Recording...</span>
-                <button
-                  onClick={stopRecording}
-                  className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center shadow-lg"
-                >
-                  <span className="w-6 h-6 rounded bg-white" />
-                </button>
-              </>
-            )}
+          <p className="text-xs font-medium text-white/30 tracking-widest uppercase">Analyzing</p>
+        </div>
+        {error && <p className="text-sm text-red-400 px-6 text-center">{error}</p>}
+      </div>
+    );
+  }
+
+  // ── Sport selector ──────────────────────────────────────────
+  if (step === 'sport') {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-8">
+        {/* Back to splash */}
+        <button
+          onClick={() => navigate('/')}
+          className="absolute top-14 left-5 text-[11px] font-semibold text-white/20 uppercase tracking-widest"
+        >
+          Ace Vision
+        </button>
+
+        <div className="w-full flex flex-col items-center">
+          <h2
+            className="text-[36px] font-bold text-white text-center leading-tight mb-16 animate-fade-up-slow"
+            style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+          >
+            Ready to<br />analyze?
+          </h2>
+
+          <div className="w-full flex flex-col items-center gap-4">
+            <button
+              onClick={() => selectSport('badminton')}
+              className="w-full max-w-[260px] py-5 rounded-2xl bg-[#111] border border-[#2a2a2a] text-white hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ fontSize: '16px', fontWeight: 500, letterSpacing: '0.04em', animationDelay: '0.5s' }}
+            >
+              Badminton
+            </button>
+            <button
+              onClick={() => selectSport('tennis_serve')}
+              className="w-full max-w-[260px] py-5 rounded-2xl bg-[#111] border border-[#2a2a2a] text-white hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ fontSize: '16px', fontWeight: 500, letterSpacing: '0.04em', animationDelay: '0.7s' }}
+            >
+              Tennis
+            </button>
           </div>
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* Recent Analysis */}
-      <div className="px-6 mt-6">
-        <h3 className="text-sm font-medium text-gray-900 mb-3">Recent Analysis</h3>
-        {recentItems.map(item => (
-          <button
-            key={item.id}
-            onClick={() => navigate('/history')}
-            className="w-full bg-white rounded-xl p-4 mb-3 border border-gray-100 flex items-center gap-3 text-left hover:shadow-sm transition-shadow"
-          >
-            <div className={`w-10 h-10 ${item.color} rounded-lg flex items-center justify-center text-white text-xs font-medium shrink-0`}>
-              {item.code}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900">{item.title}</p>
-              <p className="text-xs text-gray-400">{item.sub}</p>
-            </div>
-            <span className="text-purple-500 text-lg">›</span>
-          </button>
-        ))}
+  // ── Action screen (upload / record) ────────────────────────
+  return (
+    <div className="min-h-screen bg-black flex flex-col">
+      {/* Header */}
+      <div className="px-5 pt-14 pb-6 flex items-center gap-3 animate-fade-up-slow">
+        <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+          ‹
+        </button>
+        <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+          {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+        </span>
       </div>
 
+      <div className="flex-1 flex flex-col justify-center px-6 gap-3 pb-16">
+        {error && <p className="text-sm text-red-400 text-center mb-2">{error}</p>}
+
+        {/* Upload Video */}
+        <button
+          onClick={() => uploadInputRef.current?.click()}
+          className="w-full bg-[#C8FF57] text-black py-[22px] rounded-2xl active:opacity-80 transition-opacity animate-fade-up-slow"
+          style={{ fontSize: '16px', fontWeight: 500, letterSpacing: '0.04em', animationDelay: '0.1s' }}
+        >
+          Upload Video
+        </button>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept="video/mp4,video/quicktime,video/webm"
+          className="hidden"
+          onChange={e => { const f = e.target.files[0]; if (f) uploadFile(f); }}
+        />
+
+        {/* Record Video */}
+        <button
+          onClick={openCamera}
+          className="w-full bg-transparent border border-white/12 text-white py-[22px] rounded-2xl active:opacity-70 transition-opacity animate-fade-up-slow"
+          style={{ fontSize: '16px', fontWeight: 500, letterSpacing: '0.04em', animationDelay: '0.3s' }}
+        >
+          Record Video
+        </button>
+
+        <p
+          className="text-center text-[11px] text-white/15 mt-1 animate-fade-up-slow"
+          style={{ animationDelay: '0.5s' }}
+        >
+          MP4 · MOV · Max 200MB
+        </p>
+      </div>
+
+      {/* Camera — rendered via portal to escape overflow */}
+      {cameraOpen && (
+        <CameraPortal
+          videoRef={videoRef}
+          recording={recording}
+          onClose={closeCamera}
+          onStart={startRecording}
+          onStop={stopRecording}
+        />
+      )}
     </div>
   );
 }
