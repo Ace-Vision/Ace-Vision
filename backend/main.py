@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 
 from backend.schemas import AnalyseResponse
 from backend import pipeline, vlm
+from ml import renderer
 
 API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk"
 gemini = vlm.gemini_model(API_KEY)
@@ -64,11 +65,27 @@ async def analyse(
         os.unlink(tmp_path)
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
-    else:
-        os.unlink(tmp_path)
 
     actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
     coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level)
+
+    # Re-render overlay with highlight joint from VLM structured output
+    highlight_joint = coaching.get("highlight_joint") if coaching else None
+    if highlight_joint:
+        try:
+            highlighted_tmp = await asyncio.to_thread(
+                renderer.render_video,
+                tmp_path,
+                result["keypoints_list"],
+                result["deviation_scores"],
+                result["angles_list"],
+                highlight_joint,
+            )
+            os.replace(highlighted_tmp, actual_video_path)
+        except Exception:
+            pass  # fallback: keep original overlay
+
+    os.unlink(tmp_path)
 
     return AnalyseResponse(
         session_id=result["session_id"],

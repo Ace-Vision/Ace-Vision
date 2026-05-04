@@ -1,7 +1,18 @@
+import json
 import os
 import time
 from google import genai
+from google.genai import types
 import requests
+
+HIGHLIGHT_JOINTS = [
+    "right_elbow", "left_elbow",
+    "right_shoulder", "left_shoulder",
+    "right_wrist", "left_wrist",
+    "right_knee", "left_knee",
+    "right_hip", "left_hip",
+    "nose",
+]
 
 """"
 Using Gemini API for video analysis. This version uses gemini-2.5-flash,
@@ -47,15 +58,9 @@ class gemini_model:
             )
         return "\n".join(lines)
 
-    def analyze_video(self,video_path: str, prompt: str) -> str:
-        # 2 Upload video to Gemini for processing
+    def analyze_video(self, video_path: str, prompt: str, response_schema: dict | None = None) -> str:
         print(f"Uploading: {video_path}")
         video_file = self.client.files.upload(file=video_path)
-        
-        """
-        it takes a while for the video to be processed and become ACTIVE,
-        so we poll for status
-        """
 
         print(f"Processing (ID: {video_file.name})", end="")
         while video_file.state.name == "PROCESSING":
@@ -66,11 +71,12 @@ class gemini_model:
         if video_file.state.name != "ACTIVE":
             raise ValueError(f"Video failed to reach ACTIVE state: {video_file.state.name}")
 
-        """"
-        3. Once active, we can now ask the model to analyze the video content.
-        We wrap this in a retry loop since the model is often busy and may return
-        503 errors.
-        """
+        config = None
+        if response_schema:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema,
+            )
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -78,24 +84,18 @@ class gemini_model:
                 print(f"\nAnalysis Attempt {attempt + 1}...")
                 response = self.client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=[
-                        video_file, 
-                        prompt
-                    ]
+                    contents=[video_file, prompt],
+                    config=config,
                 )
-                
-                # Clean up cloud storage immediately after success
                 self.client.files.delete(name=video_file.name)
                 return response.text
-            
+
             except Exception as e:
                 if "503" in str(e) and attempt < max_retries - 1:
                     wait = (attempt + 1) * 10
                     print(f"Server busy. Waiting {wait}s...")
                     time.sleep(wait)
                     continue
-                
-                # Clean up even on failure
                 self.client.files.delete(name=video_file.name)
                 raise e
             
@@ -111,24 +111,36 @@ class gemini_model:
             self._format_checkpoint("Contact",         checkpoints.get("contact")),
         ])
 
-        prompt =  f"""You are an expert badminton/tennis coach.
+        prompt = f"""You are an expert badminton/tennis coach.
             The player's skill level is: {skill_level}. Use joint data provided
             by {prompt_body}. (Joint deviation scores at 3 key moments of a serve.
-            severity_score is 0.0 (perfect) to 1.0 (maximum deviation)). Give 1 specific 
-            coaching correction. Explain what was done well and also what could be improved. 
-            Be concise and practical. Focus on actionable 
-            advice.
-            
-            Maximum 100 words.
-            
-            If the video is not clear enough or is not tennis/badminton, DO NOT DESCRIBE THE VIDEO. 
-            Instead, say "Video unclear, unable to provide advice."
+            severity_score is 0.0 (perfect) to 1.0 (maximum deviation)). Give 1 specific
+            coaching correction. Explain what was done well and also what could be improved.
+            Be concise and practical. Focus on actionable advice. Maximum 100 words.
+
+            Also select the single body part (highlight_joint) from the provided list that
+            needs the most correction, based on the deviation data and video.
+
+            If the video is not clear enough or is not tennis/badminton, set advice to
+            "Video unclear, unable to provide advice." and pick any joint for highlight_joint.
             """
-        
-        
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "advice": {"type": "string"},
+                "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+            },
+            "required": ["advice", "highlight_joint"],
+        }
+
         try:
-            advice = self.analyze_video(video_path, prompt)
-            return {"advice": advice.strip()} if advice else None
+            raw = self.analyze_video(video_path, prompt, response_schema=schema)
+            data = json.loads(raw)
+            return {
+                "advice": data.get("advice", "").strip(),
+                "highlight_joint": data.get("highlight_joint"),
+            }
         except Exception:
             return None
     

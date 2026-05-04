@@ -45,7 +45,7 @@ landmark_names = [landmark.name.lower() for landmark in vision.PoseLandmark]
 index_to_name = {i: name for i, name in enumerate(landmark_names)}
 
 
-def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None) -> str:
+def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None, highlight_joint: str | None = None) -> str:
     """
     Render video with pose skeleton overlay and deviation feedback.
 
@@ -175,6 +175,15 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
             joint_label = joint.replace('_', ' ')
             text = f"{joint_label}: {live_angle:.1f}deg"
             cv2.putText(frame, text, (10, y_offset + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+        # Highlight the worst joint with a pulsing red ring
+        if highlight_joint and kp and highlight_joint in kp:
+            hx = int(kp[highlight_joint]['x'] * width)
+            hy = int(kp[highlight_joint]['y'] * height)
+            pulse = int(4 * abs(np.sin(frame_num * 0.25)))
+            radius = 20 + pulse
+            cv2.circle(frame, (hx, hy), radius + 4, (255, 255, 255), 2)
+            cv2.circle(frame, (hx, hy), radius, (0, 0, 220), 3)
 
         out.write(frame)
         frame_num += 1

@@ -101,4 +101,6 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
         "overlay_path": f"/overlay/{session_id}",
         "sport_type": sport_type,
         "overall_score": overall_score,
+        "keypoints_list": keypoints_list,
+        "angles_list": angles_list,
     }
