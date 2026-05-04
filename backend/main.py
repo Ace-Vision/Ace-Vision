@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.schemas import AnalyseResponse
 from backend import pipeline, vlm
@@ -34,6 +35,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
+if os.path.isdir(_FRONTEND_BUILD):
+    app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
 
 
 @app.get("/overlay/{session_id}")
@@ -95,3 +100,10 @@ async def analyse(
         overall_score=result["overall_score"],
         coaching=coaching,
     )
+
+
+# Catch-all: serve React SPA for all non-API routes (must be last)
+if os.path.isdir(_FRONTEND_BUILD):
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        return FileResponse(os.path.join(_FRONTEND_BUILD, "index.html"))

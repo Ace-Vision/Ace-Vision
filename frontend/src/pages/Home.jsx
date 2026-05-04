@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactDOM from 'react-dom';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.REACT_APP_API_URL || '';
 
 // Camera modal rendered via portal to escape overflow container
 function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
