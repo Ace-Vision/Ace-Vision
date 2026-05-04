@@ -63,7 +63,6 @@ function Result() {
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const CHECKPOINTS = CHECKPOINTS_BY_SPORT[sport_type] ?? CHECKPOINTS_BY_SPORT.tennis_serve;
 
-  const [expanded, setExpanded] = useState(null);
 
   return (
     <div className="min-h-screen bg-black pb-12">
@@ -84,7 +83,13 @@ function Result() {
         {/* Video */}
         {overlay_path && (
           <div className="rounded-2xl overflow-hidden bg-[#111] animate-fade-up">
-            <video src={`${API_BASE}${overlay_path}`} controls playsInline className="w-full" />
+            <video
+              src={`${API_BASE}${overlay_path}`}
+              controls
+              playsInline
+              className="w-full"
+              onLoadedMetadata={e => { e.target.playbackRate = 0.25; }}
+            />
           </div>
         )}
 
@@ -120,70 +125,42 @@ function Result() {
           <div className="space-y-2">
             {CHECKPOINTS.map(({ key, label }) => {
               const score = checkpointScore(checkpoints[key]);
-              const isOpen = expanded === key;
 
               return (
                 <div key={key}>
-                  {/* Score row — always tappable */}
-                  <button
-                    onClick={() => setExpanded(isOpen ? null : key)}
-                    className="w-full card-sm px-4 py-4 flex items-center justify-between text-left hover:bg-[#161616] transition-colors"
-                  >
+                  <div className="w-full card-sm px-4 py-4 flex items-center justify-between">
                     <span className="text-sm font-semibold text-white">{label}</span>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xl font-black tabular-nums ${scoreColor(score)}`}>
-                        {score ?? '—'}
-                      </span>
-                      <span
-                        className="text-white/20 text-base font-light transition-transform duration-200 inline-block"
-                        style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
-                      >
-                        ›
-                      </span>
-                    </div>
-                  </button>
-
-                  {/* AI Coach comment */}
-                  {isOpen && (
-                    <div className="mt-1 card-sm px-4 py-4 animate-slide-up">
-                      <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">
-                        AI Coach
-                      </p>
-                      {coaching?.advice ? (
-                        <ReactMarkdown
-                          components={{
-                            p: ({ children }) => (
-                              <p className="text-sm text-white/55 leading-relaxed mb-2 last:mb-0">{children}</p>
-                            ),
-                            strong: ({ children }) => (
-                              <span className="font-semibold text-white">{children}</span>
-                            ),
-                            ul: ({ children }) => <ul className="space-y-2 mt-1">{children}</ul>,
-                            li: ({ children }) => (
-                              <li className="flex gap-2.5 text-sm text-white/55 leading-relaxed">
-                                <span className="mt-[7px] w-1 h-1 rounded-full bg-[#C8FF57] shrink-0" />
-                                <span>{children}</span>
-                              </li>
-                            ),
-                            h1: ({ children }) => <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mt-3 mb-1 first:mt-0">{children}</p>,
-                            h2: ({ children }) => <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mt-3 mb-1 first:mt-0">{children}</p>,
-                            h3: ({ children }) => <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mt-3 mb-1 first:mt-0">{children}</p>,
-                          }}
-                        >
-                          {coaching.advice}
-                        </ReactMarkdown>
-                      ) : (
-                        <p className="text-sm text-white/30 leading-relaxed">
-                          AI coaching unavailable. Make sure Ollama is running locally.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                    <span className={`text-xl font-black tabular-nums ${scoreColor(score)}`}>
+                      {score ?? '—'}
+                    </span>
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
+
+        {/* AI Coach */}
+        {coaching?.advice && (
+          <div className="card-sm px-4 py-4 animate-fade-up" style={{ animationDelay: '0.3s' }}>
+            <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">AI Coach</p>
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => <p className="text-sm text-white/55 leading-relaxed mb-2 last:mb-0">{children}</p>,
+                strong: ({ children }) => <span className="font-semibold text-white">{children}</span>,
+                ul: ({ children }) => <ul className="space-y-2 mt-1">{children}</ul>,
+                li: ({ children }) => (
+                  <li className="flex gap-2.5 text-sm text-white/55 leading-relaxed">
+                    <span className="mt-[7px] w-1 h-1 rounded-full bg-[#C8FF57] shrink-0" />
+                    <span>{children}</span>
+                  </li>
+                ),
+              }}
+            >
+              {coaching.advice}
+            </ReactMarkdown>
+          </div>
+        )}
 
         {/* Analyze Again */}
         <button
