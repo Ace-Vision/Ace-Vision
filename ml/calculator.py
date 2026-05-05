@@ -87,12 +87,100 @@ def calculate_angles(keypoints_list: list[dict]) -> list[dict]:
             angles_list.append({})
             continue
 
-        # Use pre-computed joint mapping to avoid rebuilding
-        for joint, (p1_name, vertex_name, p2_name) in JOINT_KEYPOINTS.items():
-            p1 = _get_point(kp, p1_name)
-            vertex = _get_point(kp, vertex_name)
-            p2 = _get_point(kp, p2_name)
-            angles[joint] = _calc_angle(p1, vertex, p2)
+        # Helper function to get point
+        def get_point(name):
+            if name in kp:
+                return np.array([kp[name]['x'], kp[name]['y'], kp[name]['z']])
+            return None
+
+        # Helper function to calculate angle
+        def calc_angle(p1, vertex, p2):
+            if p1 is None or vertex is None or p2 is None:
+                return None
+            v1 = p1 - vertex
+            v2 = p2 - vertex
+            dot = np.dot(v1, v2)
+            mag1 = np.linalg.norm(v1)
+            mag2 = np.linalg.norm(v2)
+            if mag1 == 0 or mag2 == 0:
+                return None
+            cos_theta = dot / (mag1 * mag2)
+            cos_theta = np.clip(cos_theta, -1, 1)
+            return math.degrees(math.acos(cos_theta))
+
+        # Right elbow flexion: right_shoulder, right_elbow, right_wrist
+        angles['right_elbow_flexion'] = calc_angle(
+            get_point('right_shoulder'), get_point('right_elbow'), get_point('right_wrist')
+        )
+
+        # Left elbow flexion: left_shoulder, left_elbow, left_wrist
+        angles['left_elbow_flexion'] = calc_angle(
+            get_point('left_shoulder'), get_point('left_elbow'), get_point('left_wrist')
+        )
+
+        # Right shoulder abduction: right_hip, right_shoulder, right_elbow
+        angles['right_shoulder_abduction'] = calc_angle(
+            get_point('right_hip'), get_point('right_shoulder'), get_point('right_elbow')
+        )
+
+        # Left shoulder abduction: left_hip, left_shoulder, left_elbow
+        angles['left_shoulder_abduction'] = calc_angle(
+            get_point('left_hip'), get_point('left_shoulder'), get_point('left_elbow')
+        )
+
+        # Right knee flexion: right_hip, right_knee, right_ankle
+        angles['right_knee_flexion'] = calc_angle(
+            get_point('right_hip'), get_point('right_knee'), get_point('right_ankle')
+        )
+
+        # Left knee flexion: left_hip, left_knee, left_ankle
+        angles['left_knee_flexion'] = calc_angle(
+            get_point('left_hip'), get_point('left_knee'), get_point('left_ankle')
+        )
+
+        # Trunk lateral tilt: angle between the trunk vector (hip-midpoint → shoulder-midpoint)
+        # and the vertical axis (0, -1) in the image plane.
+        # Using only x/y since z adds noise from MediaPipe's depth estimation.
+        ls, rs = get_point('left_shoulder'), get_point('right_shoulder')
+        lh, rh = get_point('left_hip'),      get_point('right_hip')
+        if ls is not None and rs is not None and lh is not None and rh is not None:
+            shoulder_mid = (ls[:2] + rs[:2]) / 2
+            hip_mid      = (lh[:2] + rh[:2]) / 2
+            trunk_vec    = shoulder_mid - hip_mid          # points upward in image coords (y flipped)
+            vertical     = np.array([0.0, -1.0])           # up in image coords
+            mag = np.linalg.norm(trunk_vec)
+            if mag > 0:
+                cos_t = np.clip(np.dot(trunk_vec / mag, vertical), -1, 1)
+                angles['trunk_lateral_tilt'] = math.degrees(math.acos(cos_t))
+            else:
+                angles['trunk_lateral_tilt'] = None
+        else:
+            angles['trunk_lateral_tilt'] = None
+
+        # Hip-shoulder separation: angle between the hip axis and the shoulder axis,
+        # both measured as 2-D vectors across the frame.
+        # A value of 0° means hips and shoulders face the same direction;
+        # larger values indicate more rotation between the two segments.
+        if ls is not None and rs is not None and lh is not None and rh is not None:
+            shoulder_axis = rs[:2] - ls[:2]
+            hip_axis      = rh[:2] - lh[:2]
+            mag_s = np.linalg.norm(shoulder_axis)
+            mag_h = np.linalg.norm(hip_axis)
+            if mag_s > 0 and mag_h > 0:
+                cos_t = np.clip(
+                    np.dot(shoulder_axis / mag_s, hip_axis / mag_h), -1, 1
+                )
+                angles['hip_shoulder_separation'] = math.degrees(math.acos(cos_t))
+            else:
+                angles['hip_shoulder_separation'] = None
+        else:
+            angles['hip_shoulder_separation'] = None
+
+        # Wrist extension: right_elbow, right_wrist, right_index (or middle finger)
+        # Assuming right_wrist extension
+        angles['wrist_extension'] = calc_angle(
+            get_point('right_elbow'), get_point('right_wrist'), get_point('right_index')
+        )
 
         angles_list.append(angles)
 

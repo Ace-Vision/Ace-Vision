@@ -22,6 +22,7 @@ Key responsibilities:
 - Encode output as an MP4 video file
 """
 
+import os
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -90,12 +91,20 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Output video: use MP4V (H.264 is most widely supported)
-    output_path = video_path.replace('.mp4', '_overlay.mp4')
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
-    if not out.isOpened():
+    # Output video: enforce H.264 in MP4 for browser/Streamlit compatibility.
+    base, _ = os.path.splitext(video_path)
+    output_path = base + '_overlay.mp4'
+    preferred_codecs = ["avc1", "H264", "X264"]
+    out = None
+    for codec in preferred_codecs:
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        candidate = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if candidate.isOpened():
+            out = candidate
+            break
+        candidate.release()
+
+    if out is None:
         raise ValueError(
             "Could not create H.264 output video. "
             "Ensure OpenCV was built with ffmpeg support."

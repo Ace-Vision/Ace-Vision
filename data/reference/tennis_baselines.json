@@ -1,38 +1,116 @@
 {
-  "right_elbow_flexion": {
-    "mean": 168.5,
-    "std": 2.0
+  "trophy": {
+    "right_elbow_flexion": {
+      "mean": 114.58,
+      "std": 22.13
+    },
+    "left_elbow_flexion": {
+      "mean": 115.83,
+      "std": 13.92
+    },
+    "right_shoulder_abduction": {
+      "mean": 57.39,
+      "std": 53.39
+    },
+    "left_shoulder_abduction": {
+      "mean": 28.64,
+      "std": 13.18
+    },
+    "right_knee_flexion": {
+      "mean": 148.7,
+      "std": 14.74
+    },
+    "left_knee_flexion": {
+      "mean": 151.84,
+      "std": 20.7
+    },
+    "trunk_lateral_tilt": {
+      "mean": 15.94,
+      "std": 9.02
+    },
+    "hip_shoulder_separation": {
+      "mean": 87.84,
+      "std": 18.2
+    },
+    "wrist_extension": {
+      "mean": 156.33,
+      "std": 15.54
+    }
   },
-  "right_shoulder_abduction": {
-    "mean": 113.22,
-    "std": 2.0
+  "racket_drop": {
+    "right_elbow_flexion": {
+      "mean": 138.18,
+      "std": 18.38
+    },
+    "left_elbow_flexion": {
+      "mean": 142.03,
+      "std": 20.41
+    },
+    "right_shoulder_abduction": {
+      "mean": 88.57,
+      "std": 70.82
+    },
+    "left_shoulder_abduction": {
+      "mean": 94.27,
+      "std": 77.88
+    },
+    "right_knee_flexion": {
+      "mean": 137.56,
+      "std": 34.01
+    },
+    "left_knee_flexion": {
+      "mean": 133.74,
+      "std": 24.9
+    },
+    "trunk_lateral_tilt": {
+      "mean": 17.55,
+      "std": 9.5
+    },
+    "hip_shoulder_separation": {
+      "mean": 94.22,
+      "std": 14.68
+    },
+    "wrist_extension": {
+      "mean": 133.61,
+      "std": 20.16
+    }
   },
-  "trunk_lateral_tilt": {
-    "mean": 32.75,
-    "std": 2.0
-  },
-  "left_knee_flexion": {
-    "mean": 152.7,
-    "std": 2.0
-  },
-  "left_elbow_flexion": {
-    "mean": 125.54,
-    "std": 2.0
-  },
-  "left_shoulder_abduction": {
-    "mean": 67.44,
-    "std": 2.0
-  },
-  "right_knee_flexion": {
-    "mean": 160.02,
-    "std": 2.0
-  },
-  "hip_shoulder_separation": {
-    "mean": 73.87,
-    "std": 2.0
-  },
-  "wrist_extension": {
-    "mean": 123.34,
-    "std": 2.0
+  "contact": {
+    "right_elbow_flexion": {
+      "mean": 155.02,
+      "std": 22.04
+    },
+    "left_elbow_flexion": {
+      "mean": 143.5,
+      "std": 29.08
+    },
+    "right_shoulder_abduction": {
+      "mean": 101.44,
+      "std": 69.07
+    },
+    "left_shoulder_abduction": {
+      "mean": 100.47,
+      "std": 72.23
+    },
+    "right_knee_flexion": {
+      "mean": 140.82,
+      "std": 30.46
+    },
+    "left_knee_flexion": {
+      "mean": 134.5,
+      "std": 11.67
+    },
+    "trunk_lateral_tilt": {
+      "mean": 20.37,
+      "std": 11.24
+    },
+    "hip_shoulder_separation": {
+      "mean": 85.88,
+      "std": 6.67
+    },
+    "wrist_extension": {
+      "mean": 117.27,
+      "std": 57.57
+    }
   }
 }

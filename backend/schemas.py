@@ -15,7 +15,7 @@ Key responsibilities:
 - Provide JSON-serialisable models for internal pipeline data
 """
 
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 # SportType is not a class — it's just a name for a type.
@@ -44,8 +44,11 @@ class AnalyseResponse(BaseModel):
         deviation_scores — dict produced by scorer.score_deviations().
         overlay_path     — path to the rendered overlay video.
         sport_type       — echoed back so the frontend knows which sport these results belong to.
+        overall_score    — 0-100 score derived from average severity (100 = perfect form).
     """
     session_id: str
     deviation_scores: dict
     overlay_path: str
     sport_type: SportType
+    overall_score: int
+    coaching: Optional[dict] = None
