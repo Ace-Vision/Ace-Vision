@@ -18,6 +18,8 @@ Formulas (same for all checkpoints):
 import json
 import os
 
+import numpy as np
+
 # Maps each sport to its nested baseline file.
 BASELINES_MAP = {
     "tennis_serve": "data/reference/tennis_baselines.json",
@@ -28,6 +30,43 @@ BASELINES_MAP = {
 # ── Checkpoint detection helpers ────────────────────────────────────────────
 
 VISIBILITY_THRESHOLD = 0.5  # MediaPipe landmarks below this are unreliable
+_SMOOTH_WINDOW = 5           # rolling-median window for extremum detection
+
+
+def _rolling_median_extremum(
+    indices: list[int],
+    values: list[float],
+    find_min: bool,
+    window: int = _SMOOTH_WINDOW,
+) -> int | None:
+    """
+    Find the frame index of the extremum (min or max) of a metric time series,
+    using a rolling median to suppress single-frame spikes before searching.
+
+    Args:
+        indices: frame indices corresponding to `values`
+        values:  metric values at each valid frame
+        find_min: True to find the minimum, False to find the maximum
+        window:   rolling-median half-width (total window = 2*window+1)
+
+    Returns:
+        Frame index of the (smoothed) extremum, or None if series is empty.
+    """
+    if not indices:
+        return None
+
+    arr = np.array(values, dtype=float)
+    n = len(arr)
+
+    # Apply rolling median (reflect-pad to keep edge frames)
+    smoothed = np.empty(n)
+    for k in range(n):
+        lo = max(0, k - window)
+        hi = min(n, k + window + 1)
+        smoothed[k] = np.median(arr[lo:hi])
+
+    best_k = int(np.argmin(smoothed) if find_min else np.argmax(smoothed))
+    return indices[best_k]
 
 
 def _is_visible(kp: dict, *landmark_names: str) -> bool:
@@ -43,80 +82,42 @@ def _find_trophy_frame(keypoints_list: list[dict]) -> int | None:
     Find the frame where the right wrist is highest (trophy position).
 
     In MediaPipe normalized coords, y=0 is the TOP of the frame.
-    So the highest wrist = the frame with the SMALLEST right_wrist y value.
-    Only considers frames where the wrist and elbow are both confidently visible.
-
-    Args:
-        keypoints_list: per-frame keypoint dicts from extractor.py
-
-    Returns:
-        Frame index, or None if right_wrist is never visible.
+    Highest wrist = smallest right_wrist y. Uses a rolling median before
+    finding the minimum so single-frame spikes don't hijack the result.
     """
-    best_frame = None
-    best_y = float('inf')
-
+    idxs, vals = [], []
     for i, kp in enumerate(keypoints_list):
-        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
-            continue
-        y = kp['right_wrist']['y']
-        if y < best_y:
-            best_y = y
-            best_frame = i
-
-    return best_frame
+        if kp and _is_visible(kp, 'right_wrist', 'right_elbow'):
+            idxs.append(i)
+            vals.append(kp['right_wrist']['y'])
+    return _rolling_median_extremum(idxs, vals, find_min=True)
 
 
 def _find_racket_drop_frame(keypoints_list: list[dict], after_frame: int) -> int | None:
     """
     Find the frame where the right wrist is lowest (racket drop), after trophy.
 
-    The lowest wrist = the frame with the LARGEST right_wrist y value.
-    We only search frames that come after the trophy frame so we don't
-    accidentally pick a frame from earlier in the video.
-    Only considers frames where the wrist and elbow are both confidently visible.
-
-    Args:
-        keypoints_list: per-frame keypoint dicts from extractor.py
-        after_frame:    only look at frames with index > after_frame
-
-    Returns:
-        Frame index, or None if right_wrist is never visible after trophy.
+    Lowest wrist = largest right_wrist y. Only searches frames after `after_frame`.
+    Uses a rolling median to suppress spike frames before finding the maximum.
     """
-    best_frame = None
-    best_y = float('-inf')
-
+    idxs, vals = [], []
     for i, kp in enumerate(keypoints_list):
         if i <= after_frame:
             continue
-        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
-            continue
-        y = kp['right_wrist']['y']
-        if y > best_y:
-            best_y = y
-            best_frame = i
-
-    return best_frame
+        if kp and _is_visible(kp, 'right_wrist', 'right_elbow'):
+            idxs.append(i)
+            vals.append(kp['right_wrist']['y'])
+    return _rolling_median_extremum(idxs, vals, find_min=False)
 
 
 def _find_contact_frame(angles_list: list[dict], after_frame: int, keypoints_list: list[dict] | None = None) -> int | None:
     """
     Find the frame of ball contact (max right elbow extension), after racket drop.
 
-    At contact, the arm is fully extended so right_elbow_flexion is at its peak.
-    We only search frames after the racket drop to avoid false positives.
-    When keypoints_list is provided, skips frames where the elbow is not confidently visible.
-
-    Args:
-        angles_list:    per-frame angle dicts from calculator.py
-        after_frame:    only look at frames with index > after_frame
-        keypoints_list: optional per-frame keypoint dicts for visibility filtering
-
-    Returns:
-        Frame index, or None if no valid elbow angle is found after racket drop.
+    At contact the arm is fully extended, so right_elbow_flexion peaks.
+    Uses a rolling median on the elbow angle series before finding the maximum.
     """
-    best_frame = None
-    best_angle = 0.0
-
+    idxs, vals = [], []
     for i, angles in enumerate(angles_list):
         if i <= after_frame:
             continue
@@ -124,13 +125,10 @@ def _find_contact_frame(angles_list: list[dict], after_frame: int, keypoints_lis
             kp = keypoints_list[i]
             if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
                 continue
-        if angles and 'right_elbow_flexion' in angles:
-            angle = angles['right_elbow_flexion']
-            if angle is not None and angle > best_angle:
-                best_angle = angle
-                best_frame = i
-
-    return best_frame
+        if angles and angles.get('right_elbow_flexion') is not None:
+            idxs.append(i)
+            vals.append(angles['right_elbow_flexion'])
+    return _rolling_median_extremum(idxs, vals, find_min=False)
 
 
 # ── Badminton clear–specific detection ──────────────────────────────────────
@@ -154,34 +152,21 @@ def _find_backswing_frame(
     """
     Find the backswing (loading) frame for a badminton clear.
 
-    Searches the 120 frames immediately before contact for the frame where
-    right_elbow_flexion is smallest (most bent = arm fully cocked).
-
-    Args:
-        angles_list:  per-frame angle dicts
-        before_frame: contact frame index — only search frames before this
-        keypoints_list: optional, used for visibility filtering
-
-    Returns:
-        Frame index, or None if not found.
+    Searches the 120 frames before contact for the minimum right_elbow_flexion
+    (most bent elbow = arm fully cocked). Uses rolling median before searching.
     """
     search_start = max(0, before_frame - 120)
-    best_frame = None
-    min_angle = float('inf')
-
+    idxs, vals = [], []
     for i in range(search_start, before_frame):
         if keypoints_list and i < len(keypoints_list):
             kp = keypoints_list[i]
             if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
                 continue
         angles = angles_list[i] if i < len(angles_list) else {}
-        if angles and 'right_elbow_flexion' in angles:
-            angle = angles['right_elbow_flexion']
-            if angle is not None and angle < min_angle:
-                min_angle = angle
-                best_frame = i
-
-    return best_frame
+        if angles and angles.get('right_elbow_flexion') is not None:
+            idxs.append(i)
+            vals.append(angles['right_elbow_flexion'])
+    return _rolling_median_extremum(idxs, vals, find_min=True)
 
 
 def _find_follow_through_frame(
@@ -191,9 +176,8 @@ def _find_follow_through_frame(
     """
     Find the follow-through frame for a badminton clear.
 
-    After contact the racket arm swings down and across the body.
-    Searches for the frame where the right wrist is at its lowest point
-    (maximum y) after contact.
+    After contact the racket arm swings down. Finds the lowest wrist position
+    (maximum y) after contact, using rolling median for spike robustness.
     """
     return _find_racket_drop_frame(keypoints_list, after_frame=after_frame)
 
