@@ -3,10 +3,46 @@ backend/schemas.py — Pydantic models for request/response validation.
 """
 
 from typing import Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 from datetime import datetime
 
 SportType = Literal["badminton", "tennis_serve"]
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+class UserRegister(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    skill_level: str = "beginner"
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    name: str
+    email: str
+
+# ── User ──────────────────────────────────────────────────────────────────────
+
+class UserBase(BaseModel):
+    name: str
+    skill_level: str
+
+class UserCreate(UserBase):
+    pass
+
+class UserRead(UserBase):
+    id: int
+    email: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# ── Sessions / Deviations ─────────────────────────────────────────────────────
 
 class DeviationResultBase(BaseModel):
     joint_name: str
@@ -36,18 +72,6 @@ class SessionRead(SessionBase):
     video_path: str
     created_at: datetime
     deviations: List[DeviationResultBase]
-    model_config = ConfigDict(from_attributes=True)
-
-class UserBase(BaseModel):
-    name: str
-    skill_level: str
-
-class UserCreate(UserBase):
-    pass
-
-class UserRead(UserBase):
-    id: int
-    created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
 class AnalyseResponse(BaseModel):

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, JSON, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import create_engine
 import datetime
@@ -17,7 +17,10 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    skill_level = Column(String)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    skill_level = Column(String, default="beginner")
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     sessions = relationship("AnalysisSession", back_populates="user")
@@ -25,7 +28,7 @@ class User(Base):
 class AnalysisSession(Base):
     __tablename__ = "sessions"
 
-    id = Column(String, primary_key=True, index=True) # UUID string
+    id = Column(String, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sport_type = Column(String)
     video_path = Column(String)
