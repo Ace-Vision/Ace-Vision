@@ -29,7 +29,7 @@ import mediapipe as mp
 from mediapipe.tasks.python import vision
 
 
-# Pose connections (landmark indices)
+# Pose connections (landmark indices) — precomputed constant
 POSE_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8),
     (9, 10), (11, 12), (11, 13), (13, 15), (15, 17), (15, 19), (15, 21),
@@ -40,9 +40,32 @@ POSE_CONNECTIONS = [
     (25, 27), (26, 28), (27, 29), (28, 30), (29, 31), (30, 32)
 ]
 
-# Get landmark names
+# Get landmark names and build index mapping once (not per frame)
 landmark_names = [landmark.name.lower() for landmark in vision.PoseLandmark]
 index_to_name = {i: name for i, name in enumerate(landmark_names)}
+
+# Joint to landmark mapping — precomputed constant
+joint_landmarks = {
+    'right_elbow_flexion': 'right_elbow',
+    'left_elbow_flexion': 'left_elbow',
+    'right_shoulder_abduction': 'right_shoulder',
+    'left_shoulder_abduction': 'left_shoulder',
+    'right_knee_flexion': 'right_knee',
+    'left_knee_flexion': 'left_knee',
+    'trunk_lateral_tilt': 'nose',
+    'hip_shoulder_separation': 'left_shoulder',
+    'wrist_extension': 'right_wrist'
+}
+
+# Color mapping for severity — precomputed
+def severity_color(severity):
+    """Return BGR color tuple based on severity score."""
+    if severity < 0.3:
+        return (76, 175, 80)   # Green (BGR order for OpenCV)
+    elif severity < 0.6:
+        return (255, 152, 0)   # Amber
+    else:
+        return (244, 67, 54)   # Red
 
 
 def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: dict = None, angles_list: list[dict] = None) -> str:
@@ -84,21 +107,8 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     if out is None:
         raise ValueError(
             "Could not create H.264 output video. "
-            "No H.264 encoder (avc1/H264/X264) is available in this OpenCV build."
+            "Ensure OpenCV was built with ffmpeg support."
         )
-
-    # Joint to landmark mapping
-    joint_landmarks = {
-        'right_elbow_flexion': 'right_elbow',
-        'left_elbow_flexion': 'left_elbow',
-        'right_shoulder_abduction': 'right_shoulder',
-        'left_shoulder_abduction': 'left_shoulder',
-        'right_knee_flexion': 'right_knee',
-        'left_knee_flexion': 'left_knee',
-        'trunk_lateral_tilt': 'nose',  # Approximate
-        'hip_shoulder_separation': 'left_shoulder',  # Approximate
-        'wrist_extension': 'right_wrist'
-    }
 
     frame_num = 0
     while cap.isOpened():
@@ -110,7 +120,7 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
 
         # Draw skeleton
         if kp:
-            # Draw connections
+            # Draw connections with pre-computed constants
             for start_idx, end_idx in POSE_CONNECTIONS:
                 start_name = index_to_name.get(start_idx)
                 end_name = index_to_name.get(end_idx)
@@ -122,42 +132,27 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
             # Draw landmarks
             for landmark_name, data in kp.items():
                 x, y = int(data['x'] * width), int(data['y'] * height)
-                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)  # Green dots
+                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
 
-        # Build per-frame deviations.
-        # If we have live angles for this frame, compute severity on the fly.
-        # Fall back to the peak-frame deviation_scores if angles aren't available.
+        # Build per-frame deviations using cached constants
         frame_angles = angles_list[frame_num] if (angles_list and frame_num < len(angles_list)) else {}
         peak_deviations = deviation_scores.get('deviations', {}) if deviation_scores else {}
 
-        # For each joint, pick severity from live angles (using peak severity as reference scale)
-        # or fall back to the static peak value.
         def get_live_severity(joint):
-            # If we have a live angle and a peak reference, scale severity the same way.
+            """Get severity score for a joint in current frame."""
             if joint in frame_angles and frame_angles[joint] is not None and joint in peak_deviations:
                 peak = peak_deviations[joint]
-                # Re-compute severity using same 2*std denominator from peak data.
-                # severity = deviation / (2*std)  =>  2*std = deviation / severity
                 if peak['severity_score'] > 0:
                     two_std = peak['deviation_deg'] / peak['severity_score']
                     live_dev = abs(frame_angles[joint] - (peak['angle'] - peak['deviation_deg']
                                    if peak['direction'] == 'too_high'
                                    else peak['angle'] + peak['deviation_deg']))
                     return min(live_dev / two_std, 1.0), frame_angles[joint]
-            # Fall back to peak value
             if joint in peak_deviations:
                 return peak_deviations[joint]['severity_score'], peak_deviations[joint]['angle']
             return None, None
 
-        def severity_color(severity):
-            if severity < 0.3:
-                return (76, 175, 80)   # Green
-            elif severity < 0.6:
-                return (255, 152, 0)   # Amber
-            else:
-                return (244, 67, 54)   # Red
-
-        # Draw deviation overlays — coloured dots, live per frame
+        # Draw deviation overlays — coloured dots, live per frame (using precomputed mapping)
         for joint, landmark_name in joint_landmarks.items():
             if landmark_name in kp:
                 x, y = int(kp[landmark_name]['x'] * width), int(kp[landmark_name]['y'] * height)
@@ -165,7 +160,7 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
                 if severity is not None:
                     cv2.circle(frame, (x, y), 10, severity_color(severity), -1)
 
-        # Draw HUD — live angle values update every frame
+        # Draw HUD — live angle values update every frame (using cached joint mapping)
         y_offset = 30
         for i, (joint, landmark_name) in enumerate(joint_landmarks.items()):
             severity, live_angle = get_live_severity(joint)
