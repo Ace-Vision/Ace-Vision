@@ -22,7 +22,7 @@ import os
 import shutil
 import uuid
 
-from ml import extractor, calculator, scorer, renderer
+from ml import extractor, calculator, scorer, renderer, smoother, normaliser
 
 # Maps each sport to its sample video folder.
 # We pick the first video file found in the folder so the filename doesn't matter.
