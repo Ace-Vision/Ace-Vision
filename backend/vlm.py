@@ -2,6 +2,7 @@ import os
 import time
 from google import genai
 import requests
+from backend import db
 
 """"
 Using Gemini API for video analysis. This version uses gemini-2.5-flash,
@@ -99,7 +100,6 @@ class gemini_model:
                 self.client.files.delete(name=video_file.name)
                 raise e
             
-
     def get_coaching(self, deviation_scores: dict, video_path: str, 
                      skill_level: str = "intermediate") -> dict | None:
         
@@ -111,13 +111,16 @@ class gemini_model:
             self._format_checkpoint("Contact",         checkpoints.get("contact")),
         ])
 
-        prompt =  f"""You are an expert badminton/tennis coach.
+        base_prompt = f"""You are an expert badminton/tennis coach.
             The player's skill level is: {skill_level}. Use joint data provided
             by {prompt_body}. (Joint deviation scores at 3 key moments of a serve.
             severity_score is 0.0 (perfect) to 1.0 (maximum deviation)). Give 1 specific 
             coaching correction. Explain what was done well and also what could be improved. 
-            Be concise and practical. Focus on actionable 
-            advice.
+            Be concise and practical. Focus on actionable advice.
+            """
+
+        prompt =  f"""{base_prompt}
+            Use context from previous feedback if relevant: {context}.
             
             Maximum 100 words.
             
