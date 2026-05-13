@@ -36,27 +36,33 @@ _SWING_PAD_FRAMES = 45       # padding added each side of swing window (~1.5 s a
 
 # ── Swing-window detection ───────────────────────────────────────────────────
 
+_MERGE_GAP_SEC = 0.7   # runs separated by ≤ this many seconds are merged into one swing
+
+
 def _find_swing_window(
     keypoints_list: list[dict],
     pad_frames: int = _SWING_PAD_FRAMES,
+    fps: float = 30.0,
 ) -> tuple[int, int]:
     """
     Locate the frame range that contains the actual stroke motion.
 
-    Strategy: find contiguous segments where right_wrist_y < right_shoulder_y
-    (wrist is above shoulder in image space). This is a strong signal for a
-    serve/clear that is NOT triggered by running or walking, where the arm
-    stays at hip/waist level.
+    Strategy:
+    1. Find frames where right_wrist_y < right_shoulder_y (wrist above shoulder).
+    2. Merge nearby runs separated by ≤ 0.7 s into one — this handles players
+       whose wrist briefly dips below the shoulder mid-swing, which would
+       otherwise split a single swing into multiple fragments.  The threshold
+       is expressed in seconds so it scales correctly with video frame-rate.
+    3. Among merged runs, pick the one with the most extreme wrist elevation.
+    4. Pad each side by `pad_frames`, but cap the end so padding never bleeds
+       into a neighbouring merged run (which would be a different swing).
 
-    Among all such segments we pick the one with the most extreme wrist
-    elevation (smallest y = highest position), then pad each side by
-    `pad_frames` so the backswing and follow-through are included.
-
-    Falls back to the full video if no "wrist above shoulder" frames exist.
+    Falls back to the full video if no arm-raised frames exist.
 
     Args:
         keypoints_list: per-frame keypoint dicts (normalised recommended).
         pad_frames:     frames added before/after the detected core window.
+        fps:            video frame-rate, used to convert merge threshold to frames.
 
     Returns:
         (start_frame, end_frame) — inclusive bounds for checkpoint search.
@@ -64,6 +70,8 @@ def _find_swing_window(
     n = len(keypoints_list)
     if n == 0:
         return 0, 0
+
+    merge_gap = int(_MERGE_GAP_SEC * fps)
 
     # Build per-frame flags: True where wrist is visibly above shoulder.
     above = []
@@ -78,30 +86,52 @@ def _find_swing_window(
             above.append(False)
             wrist_y_series.append(None)
 
-    # Collect contiguous runs of True, tracking the peak elevation per run.
-    runs: list[tuple[int, int, float]] = []  # (start, end, best_wrist_y)
+    # Collect contiguous runs of True.
+    raw_runs: list[tuple[int, int]] = []
     i = 0
     while i < n:
         if above[i]:
             j = i
-            best_y = wrist_y_series[i]
             while j < n and above[j]:
-                if wrist_y_series[j] is not None and wrist_y_series[j] < best_y:
-                    best_y = wrist_y_series[j]
                 j += 1
-            runs.append((i, j - 1, best_y))
+            raw_runs.append((i, j - 1))
             i = j
         else:
             i += 1
 
-    if not runs:
-        # No arm-raised frames found — fall back to the full video.
+    if not raw_runs:
         return 0, n - 1
 
-    # Choose the run where the wrist reaches the highest point (min y).
-    best_start, best_end, _ = min(runs, key=lambda r: r[2])
+    # Merge runs whose gap is ≤ merge_gap frames.
+    merged: list[tuple[int, int]] = [raw_runs[0]]
+    for start, end in raw_runs[1:]:
+        prev_end = merged[-1][1]
+        if start - prev_end - 1 <= merge_gap:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
 
-    return max(0, best_start - pad_frames), min(n - 1, best_end + pad_frames)
+    # For each merged run, find the best (lowest) wrist y within it.
+    def best_y_in(start, end):
+        ys = [wrist_y_series[k] for k in range(start, end + 1)
+              if wrist_y_series[k] is not None]
+        return min(ys) if ys else 0.0
+
+    runs_with_y = [(s, e, best_y_in(s, e)) for s, e in merged]
+
+    # Choose the run where the wrist reaches the highest point (min y).
+    best_idx = int(np.argmin([r[2] for r in runs_with_y]))
+    best_start, best_end, _ = runs_with_y[best_idx]
+
+    # Pad, but never let the end bleed into the next merged run.
+    win_start = max(0, best_start - pad_frames)
+    if best_idx + 1 < len(runs_with_y):
+        next_run_start = runs_with_y[best_idx + 1][0]
+        win_end = min(best_end + pad_frames, next_run_start - 1)
+    else:
+        win_end = min(best_end + pad_frames, n - 1)
+
+    return win_start, win_end
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -289,6 +319,7 @@ def score_deviations(
     angles_list: list[dict],
     sport_type: str = "tennis_serve",
     keypoints_list: list[dict] | None = None,
+    fps: float = 30.0,
 ) -> dict:
     """
     Detect the three serve checkpoints and score each one against expert baselines.
@@ -331,7 +362,7 @@ def score_deviations(
     kp_list = keypoints_list or []
 
     # ── 2. Detect swing window ───────────────────────────────────────────────
-    win_start, win_end = _find_swing_window(kp_list)
+    win_start, win_end = _find_swing_window(kp_list, fps=fps)
 
     # ── 3. Detect checkpoints within the swing window ────────────────────────
     def score_checkpoint(frame_idx, checkpoint_name):
