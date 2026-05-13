@@ -61,6 +61,11 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
     """
 
     # Step 1: Extract pose keypoints (VIDEO mode, BGR→RGB)
+    import cv2 as _cv2
+    _cap = _cv2.VideoCapture(video_path)
+    fps = _cap.get(_cv2.CAP_PROP_FPS) or 30.0
+    _cap.release()
+
     raw_keypoints = extractor.extract_keypoints(video_path)
 
     # Step 2: Smooth keypoints to suppress per-frame jitter
@@ -81,6 +86,7 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
         angles_list,
         sport_type,
         keypoints_list=norm_keypoints,
+        fps=fps,
     )
 
     # Step 6: Render overlay using raw (smoothed, pixel-space) keypoints
