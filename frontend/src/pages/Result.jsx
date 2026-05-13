@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 
+
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
 const FALLBACK = {
@@ -59,10 +60,14 @@ function Result() {
   const navigate = useNavigate();
   const { state } = useLocation();
   const result = state?.result ?? FALLBACK;
-  const { overall_score, sport_type, deviation_scores, coaching, overlay_path } = result;
+  const { overall_score, sport_type, deviation_scores, coaching, overlay_path, session_id } = result;
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const CHECKPOINTS = CHECKPOINTS_BY_SPORT[sport_type] ?? CHECKPOINTS_BY_SPORT.tennis_serve;
+  const [openCheckpoint, setOpenCheckpoint] = useState(null);
 
+  function toggleCheckpoint(key) {
+    setOpenCheckpoint(prev => prev === key ? null : key);
+  }
 
   return (
     <div className="min-h-screen bg-black pb-12">
@@ -125,14 +130,49 @@ function Result() {
           <div className="space-y-2">
             {CHECKPOINTS.map(({ key, label }) => {
               const score = checkpointScore(checkpoints[key]);
+              const isOpen = openCheckpoint === key;
+              const hasFrame = !!checkpoints[key];
+              const frameUrl = `${API_BASE}/frame/${session_id}/${key}`;
 
               return (
-                <div key={key}>
-                  <div className="w-full card-sm px-4 py-4 flex items-center justify-between">
+                <div key={key} className="overflow-hidden rounded-2xl bg-[#111] border border-white/[0.06]">
+                  <button
+                    onClick={() => hasFrame && toggleCheckpoint(key)}
+                    className="w-full px-4 py-4 flex items-center justify-between"
+                    style={{ cursor: hasFrame ? 'pointer' : 'default' }}
+                  >
                     <span className="text-sm font-semibold text-white">{label}</span>
-                    <span className={`text-xl font-black tabular-nums ${scoreColor(score)}`}>
-                      {score ?? '—'}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xl font-black tabular-nums ${scoreColor(score)}`}>
+                        {score ?? '—'}
+                      </span>
+                      {hasFrame && (
+                        <span
+                          className="text-white/25 text-sm transition-transform duration-300"
+                          style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', display: 'inline-block' }}
+                        >
+                          ▾
+                        </span>
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Frame image — accordion */}
+                  <div
+                    style={{
+                      maxHeight: isOpen ? '320px' : '0px',
+                      transition: 'max-height 0.35s ease',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div className="px-3 pb-3">
+                      <img
+                        src={frameUrl}
+                        alt={label}
+                        className="w-full rounded-xl object-cover"
+                        style={{ display: 'block' }}
+                      />
+                    </div>
                   </div>
                 </div>
               );
