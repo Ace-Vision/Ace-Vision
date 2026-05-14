@@ -99,11 +99,37 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
     overlay_dest = os.path.join("uploads", f"{session_id}_overlay.mp4")
     shutil.move(overlay_tmp, overlay_dest)
 
-    # Step 6: Compute overall score (100 = perfect, 0 = all joints at max deviation)
-    deviations = deviation_scores.get("deviations", {})
-    if deviations:
-        avg_severity = sum(d["severity_score"] for d in deviations.values()) / len(deviations)
-        overall_score = max(0, round((1 - avg_severity) * 100))
+    # Step 6: Weighted overall score across all checkpoints.
+    # contact carries the most weight since it's the decisive moment;
+    # the prep and follow-through contribute but matter less.
+    _WEIGHTS = {
+        "contact":        0.5,
+        "backswing":      0.3,   # badminton
+        "trophy":         0.3,   # tennis
+        "follow_through": 0.2,   # badminton
+        "racket_drop":    0.2,   # tennis
+    }
+
+    def _cp_score(cp_data):
+        if not cp_data:
+            return None
+        devs = cp_data.get("deviations", {})
+        if not devs:
+            return None
+        avg_sev = sum(d["severity_score"] for d in devs.values()) / len(devs)
+        return 1 - avg_sev
+
+    checkpoints = deviation_scores.get("checkpoints", {})
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for name, weight in _WEIGHTS.items():
+        score = _cp_score(checkpoints.get(name))
+        if score is not None:
+            weighted_sum += score * weight
+            weight_total += weight
+
+    if weight_total > 0:
+        overall_score = max(0, min(100, round(weighted_sum / weight_total * 100)))
     else:
         overall_score = 0
 
