@@ -1,19 +1,63 @@
-"""
-backend/db.py — SQLAlchemy models and database setup.
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, JSON, Boolean
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy import create_engine
+import datetime
 
-Defines the PostgreSQL-backed data models and provides engine/session
-factory for the application.
+SQLALCHEMY_DATABASE_URL = "sqlite:///./ace_vision.db"
 
-Tables:
-- User        — player profile (id, name, skill_level, created_at)
-- Session     — one analysis run (id, user_id, video_path, created_at)
-- DeviationResult — per-joint scores for a session (session_id, joint_name,
-                    player_angle, expert_mean, deviation_deg, severity_score,
-                    direction)
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Key responsibilities:
-- Configure SQLAlchemy engine from DATABASE_URL env var
-- Define ORM models with relationships (User → Sessions → DeviationResults)
-- Provide session factory and dependency injection helper for FastAPI
-- Create tables on first run via Base.metadata.create_all
-"""
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    skill_level = Column(String, default="beginner")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    sessions = relationship("AnalysisSession", back_populates="user")
+
+class AnalysisSession(Base):
+    __tablename__ = "sessions"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    sport_type = Column(String)
+    video_path = Column(String)
+    overall_score = Column(Integer)
+    coaching_feedback = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="sessions")
+    deviations = relationship("DeviationResult", back_populates="session")
+
+class DeviationResult(Base):
+    __tablename__ = "deviations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, ForeignKey("sessions.id"))
+    joint_name = Column(String)
+    player_angle = Column(Float)
+    expert_mean = Column(Float)
+    deviation_deg = Column(Float)
+    severity_score = Column(Float)
+
+    session = relationship("AnalysisSession", back_populates="deviations")
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

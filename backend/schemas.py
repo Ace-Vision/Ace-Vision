@@ -1,54 +1,84 @@
 """
 backend/schemas.py — Pydantic models for request/response validation.
-
-Defines all data shapes used by the API and internal pipeline:
-- AnalyseRequest / AnalyseResponse (video upload + results)
-- CoachingRequest / CoachingResponse (LLM coaching flow)
-- DeviationResult (per-joint deviation data)
-- CorrectionItem (single coaching correction from LLM)
-- CoachingOutput (full LLM response shape)
-
-Key responsibilities:
-- Validate incoming API request bodies
-- Serialise outgoing API responses
-- Enforce field types, ranges, and enums (e.g. skill_level)
-- Provide JSON-serialisable models for internal pipeline data
 """
 
-from typing import Literal, Optional
-from pydantic import BaseModel
+from typing import Literal, Optional, List, Dict, Any
+from pydantic import BaseModel, ConfigDict, EmailStr
+from datetime import datetime
 
-# SportType is not a class — it's just a name for a type.
-# Using Literal means Pydantic will reject anything that isn't one of these two strings.
 SportType = Literal["badminton", "tennis_serve"]
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
-class AnalyseRequest(BaseModel):
-    """
-    Sent by the frontend when the user clicks Analyse.
+class UserRegister(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    skill_level: str = "beginner"
 
-    Fields:
-        sport_type  — which sport's baselines to score against.
-        skill_level — player's self-reported level ("beginner", "intermediate", "advanced").
-    """
-    sport_type: SportType
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    name: str
+    email: str
+
+# ── User ──────────────────────────────────────────────────────────────────────
+
+class UserBase(BaseModel):
+    name: str
     skill_level: str
 
+class UserCreate(UserBase):
+    pass
+
+class UserRead(UserBase):
+    id: int
+    email: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# ── Sessions / Deviations ─────────────────────────────────────────────────────
+
+class DeviationResultBase(BaseModel):
+    joint_name: str
+    player_angle: float
+    expert_mean: float
+    deviation_deg: float
+    severity_score: float
+
+class DeviationResult(DeviationResultBase):
+    id: int
+    session_id: str
+    model_config = ConfigDict(from_attributes=True)
+
+class SessionBase(BaseModel):
+    sport_type: SportType
+    overall_score: int
+    coaching_feedback: Optional[Dict[str, Any]] = None
+
+class SessionCreate(SessionBase):
+    id: str
+    user_id: Optional[int] = None
+    video_path: str
+
+class SessionRead(SessionBase):
+    id: str
+    user_id: Optional[int]
+    video_path: str
+    created_at: datetime
+    deviations: List[DeviationResultBase]
+    model_config = ConfigDict(from_attributes=True)
 
 class AnalyseResponse(BaseModel):
-    """
-    Returned after the full pipeline has run.
-
-    Fields:
-        session_id       — unique ID for this analysis run.
-        deviation_scores — dict produced by scorer.score_deviations().
-        overlay_path     — path to the rendered overlay video.
-        sport_type       — echoed back so the frontend knows which sport these results belong to.
-        overall_score    — 0-100 score derived from average severity (100 = perfect form).
-    """
     session_id: str
     deviation_scores: dict
     overlay_path: str
     sport_type: SportType
     overall_score: int
     coaching: Optional[dict] = None
+    model_config = ConfigDict(from_attributes=True)
