@@ -18,6 +18,8 @@ Formulas (same for all checkpoints):
 import json
 import os
 
+import numpy as np
+
 # Maps each sport to its nested baseline file.
 BASELINES_MAP = {
     "tennis_serve": "data/reference/tennis_baselines.json",
@@ -25,10 +27,114 @@ BASELINES_MAP = {
 }
 
 
-# ── Checkpoint detection helpers ────────────────────────────────────────────
+# ── Constants ────────────────────────────────────────────────────────────────
 
 VISIBILITY_THRESHOLD = 0.5  # MediaPipe landmarks below this are unreliable
+_SMOOTH_WINDOW = 5           # rolling-median half-width for extremum detection
+_SWING_PAD_FRAMES = 45       # padding added each side of swing window (~1.5 s at 30 fps)
 
+
+# ── Swing-window detection ───────────────────────────────────────────────────
+
+_MERGE_GAP_SEC = 0.7   # runs separated by ≤ this many seconds are merged into one swing
+
+
+def _find_swing_window(
+    keypoints_list: list[dict],
+    pad_frames: int = _SWING_PAD_FRAMES,
+    fps: float = 30.0,
+) -> tuple[int, int]:
+    """
+    Locate the frame range that contains the actual stroke motion.
+
+    Strategy:
+    1. Find frames where right_wrist_y < right_shoulder_y (wrist above shoulder).
+    2. Merge nearby runs separated by ≤ 0.7 s into one — this handles players
+       whose wrist briefly dips below the shoulder mid-swing, which would
+       otherwise split a single swing into multiple fragments.  The threshold
+       is expressed in seconds so it scales correctly with video frame-rate.
+    3. Among merged runs, pick the one with the most extreme wrist elevation.
+    4. Pad each side by `pad_frames`, but cap the end so padding never bleeds
+       into a neighbouring merged run (which would be a different swing).
+
+    Falls back to the full video if no arm-raised frames exist.
+
+    Args:
+        keypoints_list: per-frame keypoint dicts (normalised recommended).
+        pad_frames:     frames added before/after the detected core window.
+        fps:            video frame-rate, used to convert merge threshold to frames.
+
+    Returns:
+        (start_frame, end_frame) — inclusive bounds for checkpoint search.
+    """
+    n = len(keypoints_list)
+    if n == 0:
+        return 0, 0
+
+    merge_gap = int(_MERGE_GAP_SEC * fps)
+
+    # Build per-frame flags: True where wrist is visibly above shoulder.
+    above = []
+    wrist_y_series = []
+    for kp in keypoints_list:
+        if (kp
+                and _is_visible(kp, 'right_wrist', 'right_shoulder')
+                and kp['right_wrist']['y'] < kp['right_shoulder']['y']):
+            above.append(True)
+            wrist_y_series.append(kp['right_wrist']['y'])
+        else:
+            above.append(False)
+            wrist_y_series.append(None)
+
+    # Collect contiguous runs of True.
+    raw_runs: list[tuple[int, int]] = []
+    i = 0
+    while i < n:
+        if above[i]:
+            j = i
+            while j < n and above[j]:
+                j += 1
+            raw_runs.append((i, j - 1))
+            i = j
+        else:
+            i += 1
+
+    if not raw_runs:
+        return 0, n - 1
+
+    # Merge runs whose gap is ≤ merge_gap frames.
+    merged: list[tuple[int, int]] = [raw_runs[0]]
+    for start, end in raw_runs[1:]:
+        prev_end = merged[-1][1]
+        if start - prev_end - 1 <= merge_gap:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+
+    # For each merged run, find the best (lowest) wrist y within it.
+    def best_y_in(start, end):
+        ys = [wrist_y_series[k] for k in range(start, end + 1)
+              if wrist_y_series[k] is not None]
+        return min(ys) if ys else 0.0
+
+    runs_with_y = [(s, e, best_y_in(s, e)) for s, e in merged]
+
+    # Choose the run where the wrist reaches the highest point (min y).
+    best_idx = int(np.argmin([r[2] for r in runs_with_y]))
+    best_start, best_end, _ = runs_with_y[best_idx]
+
+    # Pad, but never let the end bleed into the next merged run.
+    win_start = max(0, best_start - pad_frames)
+    if best_idx + 1 < len(runs_with_y):
+        next_run_start = runs_with_y[best_idx + 1][0]
+        win_end = min(best_end + pad_frames, next_run_start - 1)
+    else:
+        win_end = min(best_end + pad_frames, n - 1)
+
+    return win_start, win_end
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _is_visible(kp: dict, *landmark_names: str) -> bool:
     """Return True only if all named landmarks exist and meet the visibility threshold."""
@@ -38,164 +144,143 @@ def _is_visible(kp: dict, *landmark_names: str) -> bool:
     )
 
 
-def _find_trophy_frame(keypoints_list: list[dict]) -> int | None:
+def _rolling_median_extremum(
+    indices: list[int],
+    values: list[float],
+    find_min: bool,
+    window: int = _SMOOTH_WINDOW,
+) -> int | None:
     """
-    Find the frame where the right wrist is highest (trophy position).
+    Find the frame index of the extremum after rolling-median smoothing.
 
-    In MediaPipe normalized coords, y=0 is the TOP of the frame.
-    So the highest wrist = the frame with the SMALLEST right_wrist y value.
-    Only considers frames where the wrist and elbow are both confidently visible.
-
-    Args:
-        keypoints_list: per-frame keypoint dicts from extractor.py
-
-    Returns:
-        Frame index, or None if right_wrist is never visible.
+    The rolling median suppresses single-frame spikes so a lone noisy frame
+    cannot become the selected checkpoint.
     """
-    best_frame = None
-    best_y = float('inf')
+    if not indices:
+        return None
 
+    arr = np.array(values, dtype=float)
+    n = len(arr)
+
+    smoothed = np.empty(n)
+    for k in range(n):
+        lo = max(0, k - window)
+        hi = min(n, k + window + 1)
+        smoothed[k] = np.median(arr[lo:hi])
+
+    best_k = int(np.argmin(smoothed) if find_min else np.argmax(smoothed))
+    return indices[best_k]
+
+
+# ── Checkpoint detectors ─────────────────────────────────────────────────────
+#
+# All detectors now accept start_frame / end_frame bounds.
+# When called from score_deviations, these are set to the swing window so
+# only frames inside the actual stroke are considered.
+
+def _find_trophy_frame(
+    keypoints_list: list[dict],
+    start_frame: int = 0,
+    end_frame: int | None = None,
+) -> int | None:
+    """Highest right-wrist position (smallest y) within [start_frame, end_frame]."""
+    if end_frame is None:
+        end_frame = len(keypoints_list) - 1
+    idxs, vals = [], []
     for i, kp in enumerate(keypoints_list):
-        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
+        if i < start_frame or i > end_frame:
             continue
-        y = kp['right_wrist']['y']
-        if y < best_y:
-            best_y = y
-            best_frame = i
-
-    return best_frame
+        if kp and _is_visible(kp, 'right_wrist', 'right_elbow'):
+            idxs.append(i)
+            vals.append(kp['right_wrist']['y'])
+    return _rolling_median_extremum(idxs, vals, find_min=True)
 
 
-def _find_racket_drop_frame(keypoints_list: list[dict], after_frame: int) -> int | None:
-    """
-    Find the frame where the right wrist is lowest (racket drop), after trophy.
-
-    The lowest wrist = the frame with the LARGEST right_wrist y value.
-    We only search frames that come after the trophy frame so we don't
-    accidentally pick a frame from earlier in the video.
-    Only considers frames where the wrist and elbow are both confidently visible.
-
-    Args:
-        keypoints_list: per-frame keypoint dicts from extractor.py
-        after_frame:    only look at frames with index > after_frame
-
-    Returns:
-        Frame index, or None if right_wrist is never visible after trophy.
-    """
-    best_frame = None
-    best_y = float('-inf')
-
+def _find_racket_drop_frame(
+    keypoints_list: list[dict],
+    after_frame: int,
+    end_frame: int | None = None,
+) -> int | None:
+    """Lowest right-wrist position (largest y) after trophy, within end_frame."""
+    if end_frame is None:
+        end_frame = len(keypoints_list) - 1
+    idxs, vals = [], []
     for i, kp in enumerate(keypoints_list):
-        if i <= after_frame:
+        if i <= after_frame or i > end_frame:
             continue
-        if not kp or not _is_visible(kp, 'right_wrist', 'right_elbow'):
-            continue
-        y = kp['right_wrist']['y']
-        if y > best_y:
-            best_y = y
-            best_frame = i
-
-    return best_frame
+        if kp and _is_visible(kp, 'right_wrist', 'right_elbow'):
+            idxs.append(i)
+            vals.append(kp['right_wrist']['y'])
+    return _rolling_median_extremum(idxs, vals, find_min=False)
 
 
-def _find_contact_frame(angles_list: list[dict], after_frame: int, keypoints_list: list[dict] | None = None) -> int | None:
-    """
-    Find the frame of ball contact (max right elbow extension), after racket drop.
-
-    At contact, the arm is fully extended so right_elbow_flexion is at its peak.
-    We only search frames after the racket drop to avoid false positives.
-    When keypoints_list is provided, skips frames where the elbow is not confidently visible.
-
-    Args:
-        angles_list:    per-frame angle dicts from calculator.py
-        after_frame:    only look at frames with index > after_frame
-        keypoints_list: optional per-frame keypoint dicts for visibility filtering
-
-    Returns:
-        Frame index, or None if no valid elbow angle is found after racket drop.
-    """
-    best_frame = None
-    best_angle = 0.0
-
+def _find_contact_frame(
+    angles_list: list[dict],
+    after_frame: int,
+    keypoints_list: list[dict] | None = None,
+    end_frame: int | None = None,
+) -> int | None:
+    """Max right-elbow extension after racket drop, within end_frame."""
+    if end_frame is None:
+        end_frame = len(angles_list) - 1
+    idxs, vals = [], []
     for i, angles in enumerate(angles_list):
-        if i <= after_frame:
+        if i <= after_frame or i > end_frame:
             continue
         if keypoints_list and i < len(keypoints_list):
             kp = keypoints_list[i]
             if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
                 continue
-        if angles and 'right_elbow_flexion' in angles:
-            angle = angles['right_elbow_flexion']
-            if angle is not None and angle > best_angle:
-                best_angle = angle
-                best_frame = i
-
-    return best_frame
+        if angles and angles.get('right_elbow_flexion') is not None:
+            idxs.append(i)
+            vals.append(angles['right_elbow_flexion'])
+    return _rolling_median_extremum(idxs, vals, find_min=False)
 
 
-# ── Badminton clear–specific detection ──────────────────────────────────────
+# ── Badminton-specific detectors ─────────────────────────────────────────────
 
-def _find_clear_contact_frame(keypoints_list: list[dict]) -> int | None:
-    """
-    Find the contact frame for a badminton clear: the frame where the right
-    wrist is at its highest point (minimum y in MediaPipe coords).
-
-    For a clear the player reaches up to strike the shuttle at the top of
-    their reach, so highest wrist == contact.
-    """
-    return _find_trophy_frame(keypoints_list)
+def _find_clear_contact_frame(
+    keypoints_list: list[dict],
+    start_frame: int = 0,
+    end_frame: int | None = None,
+) -> int | None:
+    """Contact for a badminton clear = highest right-wrist within the swing window."""
+    return _find_trophy_frame(keypoints_list, start_frame=start_frame, end_frame=end_frame)
 
 
 def _find_backswing_frame(
     angles_list: list[dict],
     before_frame: int,
     keypoints_list: list[dict] | None = None,
+    start_frame: int = 0,
 ) -> int | None:
     """
-    Find the backswing (loading) frame for a badminton clear.
+    Most-bent right elbow (minimum flexion angle) in [start_frame, before_frame).
 
-    Searches the 120 frames immediately before contact for the frame where
-    right_elbow_flexion is smallest (most bent = arm fully cocked).
-
-    Args:
-        angles_list:  per-frame angle dicts
-        before_frame: contact frame index — only search frames before this
-        keypoints_list: optional, used for visibility filtering
-
-    Returns:
-        Frame index, or None if not found.
+    The swing window's start_frame replaces the old hard-coded 120-frame lookback.
     """
-    search_start = max(0, before_frame - 120)
-    best_frame = None
-    min_angle = float('inf')
-
-    for i in range(search_start, before_frame):
+    idxs, vals = [], []
+    for i in range(start_frame, before_frame):
         if keypoints_list and i < len(keypoints_list):
             kp = keypoints_list[i]
             if not kp or not _is_visible(kp, 'right_elbow', 'right_shoulder', 'right_wrist'):
                 continue
         angles = angles_list[i] if i < len(angles_list) else {}
-        if angles and 'right_elbow_flexion' in angles:
-            angle = angles['right_elbow_flexion']
-            if angle is not None and angle < min_angle:
-                min_angle = angle
-                best_frame = i
-
-    return best_frame
+        if angles and angles.get('right_elbow_flexion') is not None:
+            idxs.append(i)
+            vals.append(angles['right_elbow_flexion'])
+    return _rolling_median_extremum(idxs, vals, find_min=True)
 
 
 def _find_follow_through_frame(
     keypoints_list: list[dict],
     after_frame: int,
+    end_frame: int | None = None,
 ) -> int | None:
-    """
-    Find the follow-through frame for a badminton clear.
-
-    After contact the racket arm swings down and across the body.
-    Searches for the frame where the right wrist is at its lowest point
-    (maximum y) after contact.
-    """
-    return _find_racket_drop_frame(keypoints_list, after_frame=after_frame)
+    """Lowest right-wrist position after contact, within end_frame."""
+    return _find_racket_drop_frame(
+        keypoints_list, after_frame=after_frame, end_frame=end_frame
+    )
 
 
 # ── Single-frame scorer ──────────────────────────────────────────────────────
@@ -208,36 +293,23 @@ def _score_one_frame(frame_angles: dict, checkpoint_baselines: dict) -> dict:
       deviation_deg  = abs(player_angle - expert_mean)
       severity_score = min(deviation_deg / (2 * expert_std), 1.0)
       direction      = "too_high" or "too_low"
-
-    Args:
-        frame_angles:         angle dict for one frame (from calculator.py)
-        checkpoint_baselines: the sub-dict for one checkpoint, e.g. baselines["trophy"]
-
-    Returns:
-        dict: { joint_name: { angle, deviation_deg, severity_score, direction } }
     """
     deviations = {}
-
     for joint, angle in frame_angles.items():
-        # Skip joints with no angle (MediaPipe couldn't see that keypoint)
         if angle is None:
             continue
-        # Skip joints we don't have a baseline for
         if joint not in checkpoint_baselines:
             continue
-
         expert = checkpoint_baselines[joint]
         deviation_deg  = abs(angle - expert['mean'])
         severity_score = min(deviation_deg / (2 * expert['std']), 1.0)
         direction      = "too_high" if angle > expert['mean'] else "too_low"
-
         deviations[joint] = {
-            "angle":         angle,
-            "deviation_deg": deviation_deg,
+            "angle":          angle,
+            "deviation_deg":  deviation_deg,
             "severity_score": severity_score,
-            "direction":     direction,
+            "direction":      direction,
         }
-
     return deviations
 
 
@@ -247,30 +319,30 @@ def score_deviations(
     angles_list: list[dict],
     sport_type: str = "tennis_serve",
     keypoints_list: list[dict] | None = None,
+    fps: float = 30.0,
 ) -> dict:
     """
     Detect the three serve checkpoints and score each one against expert baselines.
+
+    Step 0: find the swing window (frames where wrist is above shoulder) so
+    checkpoint search is confined to the actual stroke, not the run-up.
 
     Args:
         angles_list:    per-frame angle dicts from calculator.py
         sport_type:     "tennis_serve" or "badminton"
         keypoints_list: per-frame keypoint dicts from extractor.py
-                        (needed for trophy + racket_drop detection)
 
     Returns:
         dict with shape:
         {
-          "checkpoints": {
-            "trophy":      { "frame": int, "deviations": { joint: {...} } } or None,
-            "racket_drop": { "frame": int, "deviations": { joint: {...} } } or None,
-            "contact":     { "frame": int, "deviations": { joint: {...} } } or None,
-          },
-          "deviations":        { joint: {...} },  # contact deviations (for renderer)
+          "checkpoints": { name: {"frame": int, "deviations": {...}} | None },
+          "deviations":        { joint: {...} },  # contact deviations for renderer
+          "swing_window":      [start_frame, end_frame],
           "hip_leads_shoulder": bool,
           "baseline_source":    str,
         }
     """
-    # ── 1. Load the nested baseline file ────────────────────────────────────
+    # ── 1. Load baseline file ────────────────────────────────────────────────
     if sport_type not in BASELINES_MAP:
         raise ValueError(
             f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}"
@@ -287,11 +359,13 @@ def score_deviations(
     with open(baselines_path, "r") as f:
         baselines = json.load(f)
 
-    # ── 2. Detect checkpoints (sport-specific) ──────────────────────────────
     kp_list = keypoints_list or []
 
+    # ── 2. Detect swing window ───────────────────────────────────────────────
+    win_start, win_end = _find_swing_window(kp_list, fps=fps)
+
+    # ── 3. Detect checkpoints within the swing window ────────────────────────
     def score_checkpoint(frame_idx, checkpoint_name):
-        """Score one checkpoint frame against the given baseline key."""
         if frame_idx is None:
             return None
         frame_angles = angles_list[frame_idx] if frame_idx < len(angles_list) else {}
@@ -299,15 +373,19 @@ def score_deviations(
         return {"frame": frame_idx, "deviations": deviations}
 
     if sport_type == "badminton":
-        # ── Badminton clear checkpoints ──────────────────────────────────────
-        # Order: contact is detected first (highest wrist = hit moment),
-        # then backswing is found before it, follow_through after it.
-        contact_frame       = _find_clear_contact_frame(kp_list)
-        backswing_frame     = _find_backswing_frame(
-            angles_list, before_frame=contact_frame or 0, keypoints_list=kp_list
+        contact_frame = _find_clear_contact_frame(
+            kp_list, start_frame=win_start, end_frame=win_end
+        )
+        backswing_frame = _find_backswing_frame(
+            angles_list,
+            before_frame=contact_frame if contact_frame is not None else win_end,
+            keypoints_list=kp_list,
+            start_frame=win_start,
         )
         follow_through_frame = _find_follow_through_frame(
-            kp_list, after_frame=contact_frame or 0
+            kp_list,
+            after_frame=contact_frame if contact_frame is not None else win_start,
+            end_frame=win_end,
         )
 
         checkpoints = {
@@ -321,11 +399,19 @@ def score_deviations(
         )
 
     else:
-        # ── Tennis serve checkpoints (unchanged) ─────────────────────────────
-        trophy_frame      = _find_trophy_frame(kp_list)
-        racket_drop_frame = _find_racket_drop_frame(kp_list, after_frame=trophy_frame or 0)
-        contact_frame     = _find_contact_frame(
-            angles_list, after_frame=racket_drop_frame or 0, keypoints_list=kp_list
+        trophy_frame = _find_trophy_frame(
+            kp_list, start_frame=win_start, end_frame=win_end
+        )
+        racket_drop_frame = _find_racket_drop_frame(
+            kp_list,
+            after_frame=trophy_frame if trophy_frame is not None else win_start,
+            end_frame=win_end,
+        )
+        contact_frame = _find_contact_frame(
+            angles_list,
+            after_frame=racket_drop_frame if racket_drop_frame is not None else win_start,
+            keypoints_list=kp_list,
+            end_frame=win_end,
         )
 
         checkpoints = {
@@ -338,12 +424,11 @@ def score_deviations(
             if checkpoints["contact"] is not None else {}
         )
 
-    # ── 3. Flat "deviations" key for renderer.py ────────────────────────────
-    # renderer.py reads deviation_scores["deviations"] directly (contact frame).
-
+    # ── 4. Return ────────────────────────────────────────────────────────────
     return {
         "checkpoints":        checkpoints,
         "deviations":         primary_deviations,
-        "hip_leads_shoulder": False,  # placeholder — timing check not yet implemented
+        "swing_window":       [win_start, win_end],
+        "hip_leads_shoulder": False,
         "baseline_source":    os.path.relpath(baselines_path, repo_root),
     }

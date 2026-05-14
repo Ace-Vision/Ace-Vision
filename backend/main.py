@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import sys
+import cv2
 
 # Ensure project root is in Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,12 +44,34 @@ if os.path.isdir(_FRONTEND_BUILD):
     app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
 
 
+def _save_checkpoint_frames(session_id: str, overlay_path: str, checkpoints: dict):
+    """Extract checkpoint frames from the overlay video and save as JPEGs."""
+    cap = cv2.VideoCapture(overlay_path)
+    for name, data in checkpoints.items():
+        if not data:
+            continue
+        cap.set(cv2.CAP_PROP_POS_FRAMES, data["frame"])
+        ret, frame = cap.read()
+        if ret:
+            out = os.path.join("uploads", f"{session_id}_frame_{name}.jpg")
+            cv2.imwrite(out, frame)
+    cap.release()
+
+
 @app.get("/overlay/{session_id}")
 async def get_overlay(session_id: str):
     path = os.path.join("uploads", f"{session_id}_overlay.mp4")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Overlay not found")
     return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/frame/{session_id}/{checkpoint}")
+async def get_frame(session_id: str, checkpoint: str):
+    path = os.path.join("uploads", f"{session_id}_frame_{checkpoint}.jpg")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Frame not found")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @app.post("/analyse", response_model=AnalyseResponse)
@@ -74,7 +97,7 @@ async def analyse(
         raise HTTPException(status_code=500, detail=str(exc))
 
     actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
-    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level)
+    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level, sport_type)
 
     # Re-render overlay with highlight joint from VLM structured output
     highlight_joint = coaching.get("highlight_joint") if coaching else None
@@ -93,6 +116,14 @@ async def analyse(
             pass  # fallback: keep original overlay
 
     os.unlink(tmp_path)
+
+    # Save checkpoint frames from the final overlay video
+    await asyncio.to_thread(
+        _save_checkpoint_frames,
+        result["session_id"],
+        actual_video_path,
+        result["deviation_scores"].get("checkpoints", {}),
+    )
 
     return AnalyseResponse(
         session_id=result["session_id"],

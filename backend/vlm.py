@@ -100,29 +100,66 @@ class gemini_model:
                 raise e
             
 
-    def get_coaching(self, deviation_scores: dict, video_path: str, 
-                     skill_level: str = "intermediate") -> dict | None:
-        
+    def get_coaching(self, deviation_scores: dict, video_path: str,
+                     skill_level: str = "intermediate",
+                     sport_type: str = "badminton") -> dict | None:
+
         checkpoints = deviation_scores.get("checkpoints", {})
 
-        prompt_body = "\n\n".join([
-            self._format_checkpoint("Trophy Position", checkpoints.get("trophy")),
-            self._format_checkpoint("Racket Drop",     checkpoints.get("racket_drop")),
-            self._format_checkpoint("Contact",         checkpoints.get("contact")),
-        ])
+        if sport_type == "badminton":
+            prompt_body = "\n\n".join([
+                self._format_checkpoint("Backswing",      checkpoints.get("backswing")),
+                self._format_checkpoint("Contact",        checkpoints.get("contact")),
+                self._format_checkpoint("Follow Through", checkpoints.get("follow_through")),
+            ])
+        else:
+            prompt_body = "\n\n".join([
+                self._format_checkpoint("Trophy Position", checkpoints.get("trophy")),
+                self._format_checkpoint("Racket Drop",     checkpoints.get("racket_drop")),
+                self._format_checkpoint("Contact",         checkpoints.get("contact")),
+            ])
 
-        prompt = f"""You are an expert badminton/tennis coach.
-            The player's skill level is: {skill_level}. Use joint data provided
-            by {prompt_body}. (Joint deviation scores at 3 key moments of a serve.
-            severity_score is 0.0 (perfect) to 1.0 (maximum deviation)). Give 1 specific
-            coaching correction. Explain what was done well and also what could be improved.
-            Be concise and practical. Focus on actionable advice. Maximum 100 words.
+        prompt = f"""You are an expert badminton coach analyzing a clear overhead shot.
+            The player's skill level is: {skill_level}.
 
-            Also select the single body part (highlight_joint) from the provided list that
-            needs the most correction, based on the deviation data and video.
+            Joint deviation data at 3 key moments (backswing, contact, followthrough):
+            {prompt_body}
+            (severity_score: 0.0 = perfect, 1.0 = maximum deviation from pro baseline)
 
-            If the video is not clear enough or is not tennis/badminton, set advice to
-            "Video unclear, unable to provide advice." and pick any joint for highlight_joint.
+            ---
+
+            COMMON BEGINNER MISTAKE PATTERNS — use these to identify ROOT CAUSE, not just symptoms:
+
+            1. **Late positioning / low contact point**
+            Signs: contact-frame right_shoulder_abduction low, right_elbow_flexion too bent at contact, trunk_lateral_tilt minimal
+            → Don't say "elbow not extended." Say: "You may be getting into position too late — focus on early footwork and positioning before the shuttle arrives."
+
+            2. **Wrist-only swing (no kinetic chain)**
+            Signs: wrist_extension deviation high, but right_shoulder_abduction and hip_shoulder_separation are near normal
+            → Don't say "fix your wrist." Say: "You're relying too much on wrist snap — engage your shoulder and elbow first, then let the wrist follow through naturally."
+
+            3. **Backswing too large or too small**
+            Signs: backswing-frame right_elbow_flexion or right_shoulder_abduction highly deviated
+            → Say: "Your backswing preparation is off — aim for a compact but full arm draw before swinging forward."
+
+            4. **Body facing forward (no rotation)**
+            Signs: hip_shoulder_separation low at backswing, trunk_lateral_tilt near zero throughout
+            → Say: "Your body is facing the net too early — turn sideways first and use your body rotation to generate power."
+
+            5. **Stopping at contact (no follow-through)**
+            Signs: followthrough-frame wrist_extension and right_elbow_flexion heavily deviated
+            → Say: "You're stopping your swing at impact — commit to a full follow-through to maximize power and control."
+
+            ---
+
+            Using the deviation data AND the video, identify which pattern above best matches. 
+            Give 1 coaching correction focused on the ROOT CAUSE of the issue, not the symptom.
+            Also mention briefly what the player did well.
+            Be concise, practical, and encouraging. Maximum 100 words.
+
+            Also select the single body part (highlight_joint) from the provided list that needs the most correction.
+
+            If the video is unclear or is not badminton/tennis, set advice to "Video unclear, unable to provide advice." and pick any joint for highlight_joint.
             """
 
         schema = {

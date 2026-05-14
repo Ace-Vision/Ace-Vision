@@ -2,9 +2,9 @@
 backend/pipeline.py — Orchestrates the full analysis pipeline.
 
 Chains all ml/ modules in order to process a serve video end-to-end:
-1. extractor  — extract per-frame keypoints from video
-2. smoother   — smooth keypoint time series (not yet implemented, skipped for now)
-3. normaliser — hip-centred, scale-free normalisation (not yet implemented, skipped for now)
+1. extractor  — extract per-frame keypoints from video (VIDEO mode, BGR→RGB)
+2. smoother   — Gaussian smoothing to reduce keypoint jitter
+3. normaliser — hip-centred, torso-length normalisation
 4. calculator — compute joint angles at each frame
 5. scorer     — compare angles vs expert baselines → deviation scores
 6. renderer   — draw skeleton overlay with colour-coded deviations
@@ -22,7 +22,7 @@ import os
 import shutil
 import uuid
 
-from ml import extractor, calculator, scorer, renderer
+from ml import extractor, smoother, normaliser, calculator, scorer, renderer
 
 # Maps each sport to its sample video folder.
 # We pick the first video file found in the folder so the filename doesn't matter.
@@ -60,27 +60,39 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
         dict: Contains session_id, deviation_scores, overlay_path, sport_type, overall_score.
     """
 
-    # Step 1: Use the uploaded video directly
+    # Step 1: Extract pose keypoints (VIDEO mode, BGR→RGB)
+    import cv2 as _cv2
+    _cap = _cv2.VideoCapture(video_path)
+    fps = _cap.get(_cv2.CAP_PROP_FPS) or 30.0
+    _cap.release()
 
-    # Step 2: Extract pose keypoints from every frame in the video
-    keypoints_list = extractor.extract_keypoints(video_path)
+    raw_keypoints = extractor.extract_keypoints(video_path)
 
-    # Step 2: Calculate joint angles for every frame
-    # (smoother and normaliser are skipped for now — not yet implemented)
-    angles_list = calculator.calculate_angles(keypoints_list)
+    # Step 2: Smooth keypoints to suppress per-frame jitter
+    smoothed_keypoints = smoother.smooth_keypoints(raw_keypoints)
 
-    # Step 4: Score the player's angles against the expert baselines for this sport.
-    # Pass keypoints_list so the scorer can detect trophy + racket_drop checkpoints.
+    # Step 3: Normalise to hip-centred, torso-length coordinates
+    # Makes angles comparable across different camera distances and body sizes.
+    # The renderer still needs the raw (pixel-space) keypoints for drawing, so
+    # we keep both and pass the normalised version to angle calculation/scoring.
+    norm_keypoints = normaliser.normalise_keypoints(smoothed_keypoints)
+
+    # Step 4: Calculate joint angles on normalised keypoints
+    angles_list = calculator.calculate_angles(norm_keypoints)
+
+    # Step 5: Score the player's angles against the expert baselines for this sport.
+    # Pass normalised keypoints so checkpoint detection uses smoothed coordinates.
     deviation_scores = scorer.score_deviations(
         angles_list,
         sport_type,
-        keypoints_list=keypoints_list,
+        keypoints_list=norm_keypoints,
+        fps=fps,
     )
 
-    # Step 5: Render the overlay video with colour-coded skeleton.
-    # Pass angles_list so the renderer can show live per-frame values in the HUD.
+    # Step 6: Render overlay using raw (smoothed, pixel-space) keypoints
+    # so the skeleton sits on the actual body rather than the normalised coords.
     session_id = str(uuid.uuid4())
-    overlay_tmp = renderer.render_video(video_path, keypoints_list, deviation_scores, angles_list)
+    overlay_tmp = renderer.render_video(video_path, smoothed_keypoints, deviation_scores, angles_list)
 
     # Move overlay to persistent uploads directory so it can be served over HTTP.
     os.makedirs("uploads", exist_ok=True)
@@ -101,6 +113,6 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
         "overlay_path": f"/overlay/{session_id}",
         "sport_type": sport_type,
         "overall_score": overall_score,
-        "keypoints_list": keypoints_list,
+        "keypoints_list": smoothed_keypoints,
         "angles_list": angles_list,
     }
