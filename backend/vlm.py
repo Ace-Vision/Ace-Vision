@@ -152,14 +152,16 @@ class gemini_model:
 
             ---
 
-            Using the deviation data AND the video, identify which pattern above best matches. 
+            Using the deviation data AND the video, identify which pattern above best matches.
             Give 1 coaching correction focused on the ROOT CAUSE of the issue, not the symptom.
             Also mention briefly what the player did well.
             Be concise, practical, and encouraging. Maximum 100 words.
 
-            Also select the single body part (highlight_joint) from the provided list that needs the most correction.
+            Also select:
+            - highlight_joint: the single body part from the provided list needing the most correction
+            - pattern_id: the number (1-5) of the matching pattern above
 
-            If the video is unclear or is not badminton/tennis, set advice to "Video unclear, unable to provide advice." and pick any joint for highlight_joint.
+            If the video is unclear or is not badminton/tennis, set advice to "Video unclear, unable to provide advice.", pick any joint, and set pattern_id to 1.
             """
 
         schema = {
@@ -167,8 +169,9 @@ class gemini_model:
             "properties": {
                 "advice": {"type": "string"},
                 "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+                "pattern_id": {"type": "integer"},
             },
-            "required": ["advice", "highlight_joint"],
+            "required": ["advice", "highlight_joint", "pattern_id"],
         }
 
         try:
@@ -177,6 +180,7 @@ class gemini_model:
             return {
                 "advice": data.get("advice", "").strip(),
                 "highlight_joint": data.get("highlight_joint"),
+                "pattern_id": data.get("pattern_id"),
             }
         except Exception:
             return None

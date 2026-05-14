@@ -129,6 +129,19 @@ def _save_checkpoint_frames(session_id: str, overlay_path: str, checkpoints: dic
     cap.release()
 
 
+@app.get("/reference/{sport_type}")
+async def get_reference(sport_type: str):
+    paths = {
+        "badminton":    "data/samples/badminton/clear_2.mov",
+        "tennis_serve": "data/samples/tennis/test_tennis.mp4",
+    }
+    path = paths.get(sport_type)
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Reference video not found")
+    media_type = "video/quicktime" if path.endswith(".mov") else "video/mp4"
+    return FileResponse(path, media_type=media_type)
+
+
 @app.get("/overlay/{session_id}")
 async def get_overlay(session_id: str):
     path = os.path.join("uploads", f"{session_id}_overlay.mp4")
