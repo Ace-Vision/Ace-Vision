@@ -24,7 +24,7 @@ from backend.schemas import (
     AnalyseResponse, UserCreate, UserRead, SessionRead,
     UserRegister, UserLogin, TokenResponse,
 )
-from backend import pipeline, vlm, db
+from backend import pipeline, vlm, db, vector_db
 
 # ── JWT config ────────────────────────────────────────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production")
@@ -47,14 +47,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def backfill_vector_db() -> None:
+    """Index any AnalysisSession rows not yet present in the vector DB."""
+    vdb = vector_db.get_vlm_vector_db()
+    sqlite_db = db.SessionLocal()
+    try:
+        sessions = (
+            sqlite_db.query(db.AnalysisSession)
+            .filter(db.AnalysisSession.coaching_feedback.isnot(None))
+            .all()
+        )
+        new_entries = 0
+        for session in sessions:
+            if session.id in vdb._indexed_session_ids:
+                continue
+            coaching = session.coaching_feedback
+            coaching_text = coaching.get("advice", str(coaching)) if isinstance(coaching, dict) else str(coaching)
+            joint_scores = {dev.joint_name: dev.severity_score for dev in session.deviations}
+            joint_scores["overall"] = float(session.overall_score)
+            vdb.add_vlm_output(
+                vlm_feedback=coaching_text,
+                scores=joint_scores,
+                session_id=session.id,
+                sport=session.sport_type,
+                user_id=session.user_id,
+            )
+            new_entries += 1
+        if new_entries:
+            vector_db.save_vlm_vector_db()
+            print(f"Vector DB: backfilled {new_entries} session(s).")
+    finally:
+        sqlite_db.close()
+
 @app.on_event("startup")
 def startup_event():
     db.init_db()
-    db.get_vlm_vector_db()  # load persisted vector DB from disk
+    vector_db.get_vlm_vector_db()  # load persisted vector DB from disk
+    backfill_vector_db()
 
 @app.on_event("shutdown")
 def shutdown_event():
-    db.save_vlm_vector_db()
+    vector_db.save_vlm_vector_db()
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -154,7 +187,15 @@ async def analyse(
     actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
 
     # Query vector DB for similar past feedback to use as RAG context
-    vdb = db.get_vlm_vector_db()
+
+    """
+    Here we simply search for similar coaching feedback using thr query 
+    "badminton coaching feedback" or "tennis coaching feedback". 
+    In a more advanced implementation, we could construct a more specific query
+    based on the deviation scores or other 
+    metadata from the current analysis.
+    """
+    vdb = vector_db.get_vlm_vector_db()
     similar = vdb.search(
         query=f"{sport_type} coaching feedback",
         k=3,
@@ -205,7 +246,7 @@ async def analyse(
             sport=sport_type,
             user_id=user_id,
         )
-        await asyncio.to_thread(db.save_vlm_vector_db)
+        await asyncio.to_thread(vector_db.save_vlm_vector_db)
 
     return AnalyseResponse(
         session_id=result["session_id"],
@@ -251,7 +292,7 @@ def search_coaching(
     k: int = 5,
 ):
     """Semantic search over stored VLM coaching feedback."""
-    vdb = db.get_vlm_vector_db()
+    vdb = vector_db.get_vlm_vector_db()
     results = vdb.search(q, k=k, sport=sport, user_id=user_id)
     return [
         {
@@ -268,5 +309,5 @@ def search_coaching(
 @app.get("/users/{user_id}/progress")
 def get_user_progress(user_id: int, sport: Optional[str] = None):
     """Return mean deviation scores across all past sessions for a user."""
-    vdb = db.get_vlm_vector_db()
+    vdb = vector_db.get_vlm_vector_db()
     return vdb.aggregate_scores(user_id=user_id, sport=sport)
