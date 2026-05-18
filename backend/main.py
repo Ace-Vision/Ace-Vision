@@ -50,6 +50,11 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_event():
     db.init_db()
+    db.get_vlm_vector_db()  # load persisted vector DB from disk
+
+@app.on_event("shutdown")
+def shutdown_event():
+    db.save_vlm_vector_db()
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -147,7 +152,20 @@ async def analyse(
         os.unlink(tmp_path)
 
     actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
-    coaching = await asyncio.to_thread(gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level)
+
+    # Query vector DB for similar past feedback to use as RAG context
+    vdb = db.get_vlm_vector_db()
+    similar = vdb.search(
+        query=f"{sport_type} coaching feedback",
+        k=3,
+        sport=sport_type,
+        user_id=user_id,
+    )
+    rag_context = "\n---\n".join(r["matched_chunk"] for r in similar)
+
+    coaching = await asyncio.to_thread(
+        gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level, rag_context
+    )
 
     db_session = db.AnalysisSession(
         id=result["session_id"],
@@ -171,6 +189,23 @@ async def analyse(
         ))
 
     sqlite_db.commit()
+
+    # Index coaching output in vector DB for future RAG retrieval
+    if coaching:
+        coaching_text = coaching.get("advice", str(coaching))
+        joint_scores = {
+            joint: data["severity_score"]
+            for joint, data in deviations.items()
+        }
+        joint_scores["overall"] = float(result["overall_score"])
+        vdb.add_vlm_output(
+            vlm_feedback=coaching_text,
+            scores=joint_scores,
+            session_id=result["session_id"],
+            sport=sport_type,
+            user_id=user_id,
+        )
+        await asyncio.to_thread(db.save_vlm_vector_db)
 
     return AnalyseResponse(
         session_id=result["session_id"],
@@ -205,3 +240,33 @@ def get_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+# ── Vector DB endpoints ───────────────────────────────────────────────────────
+
+@app.get("/coaching/search")
+def search_coaching(
+    q: str,
+    sport: Optional[str] = None,
+    user_id: Optional[int] = None,
+    k: int = 5,
+):
+    """Semantic search over stored VLM coaching feedback."""
+    vdb = db.get_vlm_vector_db()
+    results = vdb.search(q, k=k, sport=sport, user_id=user_id)
+    return [
+        {
+            "session_id": r["entry"]["session_id"],
+            "sport": r["entry"]["sport"],
+            "matched_chunk": r["matched_chunk"],
+            "similarity_score": r["similarity_score"],
+            "scores": r["entry"]["scores"],
+            "created_at": r["entry"]["created_at"],
+        }
+        for r in results
+    ]
+
+@app.get("/users/{user_id}/progress")
+def get_user_progress(user_id: int, sport: Optional[str] = None):
+    """Return mean deviation scores across all past sessions for a user."""
+    vdb = db.get_vlm_vector_db()
+    return vdb.aggregate_scores(user_id=user_id, sport=sport)

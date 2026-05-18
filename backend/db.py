@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, JSO
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import create_engine
 import datetime
+import os
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./ace_vision.db"
 
@@ -378,3 +379,29 @@ class VLMVectorDatabase:
 
     def __repr__(self) -> str:
         return f"VLMVectorDatabase(entries={len(self.entries)}, chunks={len(self.chunks)})"
+
+
+# ── Singleton helpers ─────────────────────────────────────────────────────────
+
+VLM_VECTOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ace_vision_vectors")
+
+_vlm_embedding_model: Optional[VLMEmbeddingModel] = None
+_vlm_vector_db: Optional[VLMVectorDatabase] = None
+
+
+def get_vlm_vector_db() -> VLMVectorDatabase:
+    """Return (or initialise) the process-wide VLMVectorDatabase, loading from disk on first call."""
+    global _vlm_embedding_model, _vlm_vector_db
+    if _vlm_vector_db is None:
+        _vlm_embedding_model = VLMEmbeddingModel()
+        try:
+            _vlm_vector_db = VLMVectorDatabase.load(VLM_VECTOR_DIR, _vlm_embedding_model)
+        except (FileNotFoundError, KeyError):
+            _vlm_vector_db = VLMVectorDatabase(_vlm_embedding_model)
+    return _vlm_vector_db
+
+
+def save_vlm_vector_db() -> None:
+    """Persist the in-memory vector DB to disk (no-op if never initialised)."""
+    if _vlm_vector_db is not None:
+        _vlm_vector_db.save(VLM_VECTOR_DIR)
