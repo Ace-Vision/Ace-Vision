@@ -81,4 +81,5 @@ class AnalyseResponse(BaseModel):
     sport_type: SportType
     overall_score: int
     coaching: Optional[dict] = None
+    highlight_applied: bool = False
     model_config = ConfigDict(from_attributes=True)
