@@ -202,11 +202,20 @@ function Result() {
           </div>
         )}
 
+        {/* Full Advice */}
+        <button
+          onClick={() => navigate('/advice', { state: { result, sport: sport_type } })}
+          className="w-full py-4 rounded-2xl text-sm font-semibold text-black transition-opacity active:opacity-80 animate-fade-up"
+          style={{ background: '#C8FF57', animationDelay: '0.35s' }}
+        >
+          Full Advice →
+        </button>
+
         {/* Analyze Again */}
         <button
           onClick={() => navigate('/home')}
           className="w-full py-4 rounded-2xl bg-white/[0.04] border border-white/[0.07] text-sm font-semibold text-white/30 transition-colors hover:bg-white/[0.07] animate-fade-up"
-          style={{ animationDelay: '0.3s' }}
+          style={{ animationDelay: '0.4s' }}
         >
           Analyze Again
         </button>

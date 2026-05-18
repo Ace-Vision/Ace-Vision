@@ -1,31 +1,39 @@
-import requests
-import os
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend import db
+import pytest
+import uuid
 
-BASE_URL = "http://localhost:8000"
+@pytest.fixture(scope="module", autouse=True)
+def setup_db():
+    db.init_db()
+    yield
+
+client = TestClient(app)
 
 def test_user_flow():
-    # 1. Create a user
-    user_data = {"name": "Test Player", "skill_level": "intermediate"}
-    response = requests.post(f"{BASE_URL}/users", json=user_data)
-    if response.status_code != 200:
-        print(f"Failed to create user: {response.text}")
-        return
+    # 1. Create a user via auth register
+    unique_email = f"test_{uuid.uuid4().hex[:8]}@example.com"
+    user_data = {
+        "name": "Test Player",
+        "email": unique_email,
+        "password": "securepassword",
+        "skill_level": "intermediate"
+    }
+    response = client.post("/auth/register", json=user_data)
+    assert response.status_code == 200, f"Failed to register user: {response.text}"
     
     user = response.json()
-    user_id = user["id"]
-    print(f"Created user with ID: {user_id}")
+    user_id = user["user_id"]
+    assert user["name"] == "Test Player"
 
     # 2. List users
-    response = requests.get(f"{BASE_URL}/users")
-    print(f"Users list: {response.json()}")
+    response = client.get("/users")
+    assert response.status_code == 200
+    users = response.json()
+    assert any(u["id"] == user_id for u in users)
 
-    # 3. Check history (should be empty)
-    response = requests.get(f"{BASE_URL}/users/{user_id}/history")
-    print(f"Initial history: {response.json()}")
-
-if __name__ == "__main__":
-    # Note: This assumes the server is running. 
-    # Since I cannot easily run a long-lived process and hit it with requests in one turn,
-    # I will try to use the fastapi TestClient in a separate script if needed,
-    # or just start the server in background.
-    pass
+    # 3. Check history (should be empty initially)
+    response = client.get(f"/users/{user_id}/history")
+    assert response.status_code == 200
+    assert response.json() == []

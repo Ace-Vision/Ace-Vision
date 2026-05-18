@@ -42,7 +42,7 @@ export default function Splash() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('http://localhost:8000/auth/login', {
+      const res = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -227,6 +227,15 @@ export default function Splash() {
               Sign up
             </button>
           </p>
+
+          {/* Guest */}
+          <button
+            onClick={() => navigate('/home')}
+            className="w-full mt-5 text-xs font-medium transition-opacity active:opacity-50"
+            style={{ color: 'rgba(255,255,255,0.2)' }}
+          >
+            Continue without signing in
+          </button>
         </div>
       </div>
     </div>
