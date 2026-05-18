@@ -28,7 +28,7 @@ export default function SignUp() {
 
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/auth/register', {
+      const res = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, skill_level: form.skill_level.toLowerCase() }),
