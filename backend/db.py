@@ -3,6 +3,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import create_engine
 import datetime
 
+def _utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
 SQLALCHEMY_DATABASE_URL = "sqlite:///./ace_vision.db"
 
 engine = create_engine(
@@ -21,7 +24,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     skill_level = Column(String, default="beginner")
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_utc_now)
 
     sessions = relationship("AnalysisSession", back_populates="user")
 
@@ -34,7 +37,7 @@ class AnalysisSession(Base):
     video_path = Column(String)
     overall_score = Column(Integer)
     coaching_feedback = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_utc_now)
 
     user = relationship("User", back_populates="sessions")
     deviations = relationship("DeviationResult", back_populates="session")
