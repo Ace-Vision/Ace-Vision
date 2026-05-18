@@ -14,12 +14,14 @@ Endpoints:
 """
 
 import asyncio
+import logging
 import os
 import sys
 import shutil
 import tempfile
 import cv2
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,7 +40,14 @@ from backend.schemas import (
     UserRegister, UserLogin, TokenResponse,
 )
 from backend import pipeline, vlm, db
+from backend.upload_validation import (
+    MAX_BYTES,
+    validate_upload_metadata,
+    validate_video_duration,
+)
 from ml import renderer
+
+logger = logging.getLogger(__name__)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production")
 ALGORITHM = "HS256"
@@ -52,17 +61,20 @@ if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 gemini = vlm.gemini_model(API_KEY)
 
-app = FastAPI(title="Ace Vision API")
+_FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    yield
+
+
+app = FastAPI(title="Ace Vision API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-_FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
 if os.path.isdir(_FRONTEND_BUILD):
     app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
-
-
-@app.on_event("startup")
-def startup_event():
-    db.init_db()
 
 
 def hash_password(password: str) -> str:
@@ -73,7 +85,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict) -> str:
     payload = data.copy()
-    payload["exp"] = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload["exp"] = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 def get_current_user(token: str = Depends(oauth2_scheme), sqlite_db: Session = Depends(db.get_db)):
@@ -90,6 +102,25 @@ def get_current_user(token: str = Depends(oauth2_scheme), sqlite_db: Session = D
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+
+async def _save_upload(file: UploadFile) -> tuple[str, int]:
+    """Stream upload to a temp file with size cap. Returns (path, bytes_written)."""
+    suffix = (os.path.splitext(file.filename or "")[1] or ".mp4").lower()
+    bytes_written = 0
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        while chunk := await file.read(1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > MAX_BYTES:
+                tmp_path = tmp.name
+                os.unlink(tmp_path)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds maximum size ({MAX_BYTES // (1024 * 1024)} MB).",
+                )
+            tmp.write(chunk)
+        return tmp.name, bytes_written
 
 
 @app.post("/auth/register", response_model=TokenResponse)
@@ -168,16 +199,32 @@ async def analyse(
     if sport_type not in ("badminton", "tennis_serve"):
         raise HTTPException(status_code=422, detail="sport_type must be badminton or tennis_serve")
 
-    suffix = os.path.splitext(file.filename)[1] or ".mp4"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    try:
+        validate_upload_metadata(file.filename, file.content_type, 0)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    tmp_path = None
+    try:
+        tmp_path, bytes_written = await _save_upload(file)
+        validate_upload_metadata(file.filename, file.content_type, bytes_written)
+        validate_video_duration(tmp_path)
+    except ValueError as exc:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
     try:
         result = await asyncio.to_thread(pipeline.run_pipeline, tmp_path, sport_type, skill_level)
     except Exception as exc:
         os.unlink(tmp_path)
-        import traceback; traceback.print_exc()
+        logger.exception("Pipeline failed")
         raise HTTPException(status_code=500, detail=str(exc))
 
     actual_video_path = os.path.join("uploads", f"{result['session_id']}_overlay.mp4")
@@ -185,6 +232,7 @@ async def analyse(
         gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level, sport_type,
     )
 
+    highlight_applied = False
     highlight_joint = coaching.get("highlight_joint") if coaching else None
     if highlight_joint:
         try:
@@ -193,8 +241,13 @@ async def analyse(
                 result["keypoints_list"], result["deviation_scores"], result["angles_list"], highlight_joint,
             )
             os.replace(highlighted_tmp, actual_video_path)
+            highlight_applied = True
         except Exception:
-            pass
+            logger.exception(
+                "Highlight re-render failed for session %s joint %s",
+                result["session_id"],
+                highlight_joint,
+            )
 
     os.unlink(tmp_path)
 
@@ -220,6 +273,7 @@ async def analyse(
         session_id=result["session_id"], deviation_scores=result["deviation_scores"],
         overlay_path=result["overlay_path"], sport_type=sport_type,
         overall_score=result["overall_score"], coaching=coaching,
+        highlight_applied=highlight_applied,
     )
 
 
