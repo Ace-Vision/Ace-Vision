@@ -26,6 +26,33 @@ BASELINES_MAP = {
     "badminton":    "data/reference/badminton_baselines.json",
 }
 
+# Cache baselines in memory to avoid re-reading JSON files
+_baselines_cache = {}
+
+
+def _load_baselines(sport_type: str) -> dict:
+    """Load and cache baselines for a sport type."""
+    if sport_type in _baselines_cache:
+        return _baselines_cache[sport_type]
+    
+    if sport_type not in BASELINES_MAP:
+        raise ValueError(f"Unknown sport_type '{sport_type}'. Choose from: {list(BASELINES_MAP)}")
+
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    baselines_path = os.path.join(repo_root, BASELINES_MAP[sport_type])
+
+    if not os.path.exists(baselines_path):
+        raise FileNotFoundError(
+            f"Baseline file not found for '{sport_type}'. "
+            f"Expected: '{baselines_path}'."
+        )
+
+    with open(baselines_path, "r") as f:
+        baselines = json.load(f)
+    
+    _baselines_cache[sport_type] = baselines
+    return baselines
+
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
