@@ -2,31 +2,32 @@
 
 ## What it does
 
-Analyses a tennis serve from video and gives the player coaching feedback.
+Analyses a tennis serve or badminton overhead from video and gives biomechanics feedback plus AI coaching.
 
 **Pipeline:**
 ```
-Video in → Pose extraction → Joint angles → Deviation overlay → LLM coaching advice
+Video in → Pose extraction → Smooth → Normalise → Joint angles → Deviation scoring → Overlay → Gemini coaching
 ```
 
 ---
 
-## Scope (MVP only)
+## Scope (MVP)
 
-- Serve stroke only — no classifier needed, user explicitly uploads a serve
-- No ball tracking
-- No court detection
-- Offline processing (not real-time)
+- User uploads or records a serve/clear — no stroke classifier
+- Sports: `badminton`, `tennis_serve`
+- No ball tracking or court detection
+- Offline batch processing (not real-time)
 
 ---
 
 ## Stack
 
-- **Pose:** MediaPipe
+- **Pose:** MediaPipe (`models/pose_landmarker.task`)
 - **CV / overlay:** OpenCV
-- **Backend:** FastAPI + PostgreSQL
-- **LLM:** Local Model / Claude API (claude-sonnet-4-6)
-- **Mobile:** React Native (Phase 4 — not MVP)
+- **Backend:** FastAPI + SQLite (SQLAlchemy)
+- **Frontend:** React + Tailwind (built to `frontend/build`, served by FastAPI)
+- **Coaching:** Google Gemini 2.5 Flash (`backend/vlm.py`)
+- **Experimental (optional):** Ollama + RAG + Streamlit — see `requirements-experimental.txt`
 
 ---
 
@@ -36,24 +37,29 @@ Video in → Pose extraction → Joint angles → Deviation overlay → LLM coac
 ace-vision/
 ├── ml/
 │   ├── extractor.py       # MediaPipe pose extraction → per-frame JSON
-│   ├── smoother.py        # Gaussian smoothing on keypoint time series
+│   ├── smoother.py        # Gaussian smoothing (scipy)
 │   ├── normaliser.py      # Hip-centred, scale-free normalisation
 │   ├── calculator.py      # Joint angle computation (arccos dot product)
 │   ├── scorer.py          # Compare angles vs expert baselines → deviation scores
-│   └── renderer.py        # Draw skeleton + colour-coded overlay on video
+│   └── renderer.py        # Skeleton + colour-coded overlay on video
 ├── backend/
-│   ├── main.py            # FastAPI entry point
+│   ├── main.py            # FastAPI entry point, auth, static frontend
 │   ├── pipeline.py        # Chains all ml/ modules in order
-│   ├── llm.py             # Claude API call → structured coaching JSON
+│   ├── vlm.py             # Gemini coaching (structured JSON)
+│   ├── upload_validation.py  # Upload size, type, duration limits
 │   ├── schemas.py         # Pydantic models
-│   └── db.py              # SQLAlchemy models: User, Session, DeviationResult
+│   ├── db.py              # SQLAlchemy models: User, Session, DeviationResult
+│   ├── llm.py             # (experimental) Ollama coaching
+│   └── vector_db.py       # (experimental) RAG over PDFs
+├── frontend/              # React app
 ├── data/
-│   ├── reference/
-│   │   └── expert_baselines.json   # Expert joint angle distributions
-│   └── samples/                    # Test videos (gitignored)
-├── tests/
-├── .env.example
-└── requirements.txt
+│   ├── reference/         # Expert baseline JSON per sport
+│   └── samples/           # Reference/sample videos (gitignored)
+├── uploads/               # Generated overlays and frames (gitignored)
+├── streamlit_app.py       # (experimental) alternate UI
+├── requirements.txt
+├── requirements-experimental.txt
+└── tests/
 ```
 
 ---
@@ -76,24 +82,18 @@ Angle formula: `θ = arccos(dot(v1, v2) / (|v1| × |v2|))` where v1 and v2 point
 
 ---
 
-## Expert baselines (`expert_baselines.json`)
+## Expert baselines
 
-Hardcode these values to start. Replace with THETIS-derived values later.
+Per-sport JSON under `data/reference/`:
 
-```json
-{
-  "right_elbow_flexion":     { "mean": 118, "std": 8  },
-  "right_shoulder_abduction":{ "mean": 90,  "std": 10 },
-  "trunk_lateral_tilt":      { "mean": 15,  "std": 5  },
-  "left_knee_flexion":       { "mean": 45,  "std": 8  }
-}
-```
+- `tennis_baselines.json`
+- `badminton_baselines.json`
 
 ---
 
 ## Deviation scoring
 
-For each joint:
+For each joint at each checkpoint:
 
 ```python
 deviation_deg   = abs(player_angle - expert_mean)
@@ -101,93 +101,67 @@ severity_score  = min(deviation_deg / (2 * expert_std), 1.0)
 direction       = "too_high" if player_angle > expert_mean else "too_low"
 ```
 
-Also compute: `hip_leads_shoulder` (bool) — True if peak hip rotation precedes peak shoulder rotation by > 3 frames.
+Overall score uses weighted checkpoint averages (contact weighted highest). See `backend/pipeline.py`.
+
+Overlay colours: **green** (< 0.3) · **amber** (0.3–0.6) · **red** (> 0.6)
 
 ---
 
 ## Overlay (renderer.py)
 
-Draw on each frame in this order:
+Draw on each frame:
 
-1. White skeleton lines (MediaPipe POSE_CONNECTIONS, 60% opacity)
-2. Colour-coded joint dots for the 9 serve joints:
-   - Green `#4CAF50` — severity < 0.3
-   - Amber `#FF9800` — severity 0.3–0.6
-   - Red `#F44336` — severity > 0.6
-3. Small angle arc at each joint (radius 30px, matching colour)
-4. HUD top-right: top 3 deviations with joint name + degrees off
+1. White skeleton lines (MediaPipe connections)
+2. Colour-coded joint dots by severity
+3. Optional highlight pass for the worst joint (after Gemini coaching)
 
 ---
 
 ## API endpoints
 
-**`POST /analyse`**
-- Input: video file (mp4), skill_level (string)
-- Runs the full pipeline
-- Returns: overlay video + deviation scores JSON + session_id
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/register` | Register; returns JWT |
+| POST | `/auth/login` | Login; returns JWT |
+| GET | `/auth/me` | Current user (Bearer token) |
+| POST | `/analyse` | Upload video + `sport_type` + `skill_level`; runs full pipeline + coaching |
+| GET | `/overlay/{session_id}` | Overlay MP4 |
+| GET | `/frame/{session_id}/{checkpoint}` | Checkpoint JPEG |
+| GET | `/reference/{sport_type}` | Sample reference video |
+| GET | `/users/{user_id}/history` | Past sessions |
+| GET | `/sessions/{session_id}` | Session detail |
 
-**`POST /coaching`**
-- Input: session_id, deviation_scores, skill_level
-- Calls LLM
-- Returns: coaching JSON (2 corrections + summary)
+### `POST /analyse`
 
----
+- **Input:** `file` (video), `sport_type` (`badminton` \| `tennis_serve`), `skill_level`, optional `user_id`
+- **Limits:** `MAX_UPLOAD_BYTES` (default 100 MB), `MAX_VIDEO_DURATION_SEC` (default 30 s)
+- **Returns:** `session_id`, `deviation_scores`, `overlay_path`, `overall_score`, `coaching`, `highlight_applied`
 
-## LLM system prompt (do not change)
-
-```
-You are a professional tennis biomechanics coach.
-You will receive joint angle deviation data from a player's serve.
-
-Rules:
-1. Every correction must reference a specific field from the JSON by name.
-2. No generic advice. "Keep your eye on the ball" is forbidden.
-3. Address highest severity_score first.
-4. Maximum 2 corrections. One drill each.
-5. If hip_leads_shoulder is false, address kinetic chain first.
-6. Return only valid JSON. No preamble.
-
-Output schema:
-{
-  "corrections": [
-    { "joint": "", "deviation_deg": 0, "impact": "", "drill": "" }
-  ],
-  "summary": ""
-}
-```
+Coaching prompt and JSON schema live in `backend/vlm.py` (single source of truth).
 
 ---
 
 ## Environment variables
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_URL=postgresql://localhost:5432/ace_vision
-REFERENCE_BASELINES_PATH=./data/reference/expert_baselines.json
+GEMINI_API_KEY=...              # required
+SECRET_KEY=...                  # JWT signing (change in production)
+MAX_UPLOAD_BYTES=104857600      # optional, default 100 MB
+MAX_VIDEO_DURATION_SEC=30     # optional
 ```
 
 ---
 
 ## Dependencies
 
-```
-absl-py==2.4.0
-cffi==2.0.0
-contourpy==1.3.3
-cycler==0.12.1
-flatbuffers==25.12.19
-fonttools==4.62.1
-kiwisolver==1.5.0
-matplotlib==3.10.8
-mediapipe==0.10.33
-numpy==2.4.4
-opencv-contrib-python==4.13.0.92
-opencv-python==4.13.0.92
-packaging==26.0
-pillow==12.2.0
-pycparser==3.0
-pyparsing==3.3.2
-python-dateutil==2.9.0.post0
-six==1.17.0
-sounddevice==0.5.5
+**Core:** `pip install -r requirements.txt`
+
+**Experimental (Ollama, RAG, Streamlit):** `pip install -r requirements-experimental.txt`
+
+---
+
+## Running tests
+
+```bash
+GEMINI_API_KEY=your_key pytest
 ```
