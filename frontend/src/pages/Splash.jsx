@@ -54,6 +54,7 @@ export default function Splash() {
       }
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user', JSON.stringify({ id: data.user_id, name: data.name, email: data.email }));
+      localStorage.removeItem('guest');
       navigate('/home');
     } catch {
       setError('Cannot connect to server. Make sure the backend is running.');
@@ -230,7 +231,7 @@ export default function Splash() {
 
           {/* Guest */}
           <button
-            onClick={() => navigate('/home')}
+            onClick={() => { localStorage.setItem('guest', 'true'); navigate('/home'); }}
             className="w-full mt-5 text-xs font-medium transition-opacity active:opacity-50"
             style={{ color: 'rgba(255,255,255,0.2)' }}
           >

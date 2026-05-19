@@ -40,6 +40,7 @@ export default function SignUp() {
       }
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user', JSON.stringify({ id: data.user_id, name: data.name, email: data.email }));
+      localStorage.removeItem('guest');
       navigate('/home');
     } catch {
       setError('Cannot connect to server. Make sure the backend is running.');

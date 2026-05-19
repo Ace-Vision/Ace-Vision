@@ -6,6 +6,7 @@ import Result  from './pages/Result';
 import Advice  from './pages/Advice';
 
 function isTokenValid() {
+  if (localStorage.getItem('guest') === 'true') return true;
   const token = localStorage.getItem('token');
   if (!token) return false;
   try {
