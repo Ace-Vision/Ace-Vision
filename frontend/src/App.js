@@ -5,9 +5,24 @@ import Home    from './pages/Home';
 import Result  from './pages/Result';
 import Advice  from './pages/Advice';
 
-function PrivateRoute({ element }) {
+function isTokenValid() {
   const token = localStorage.getItem('token');
-  return token ? element : <Navigate to="/" replace />;
+  if (!token) return false;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function PrivateRoute({ element }) {
+  if (!isTokenValid()) {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    return <Navigate to="/" replace />;
+  }
+  return element;
 }
 
 function App() {
