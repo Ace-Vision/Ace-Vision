@@ -21,7 +21,7 @@ Usually it takes a few attempts to generate since it is often busy.
 """
 
 # 1. Input API key and choose video path
-#API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk" 
+#API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk"
 #video_path = r"C:\Users\ldahl\Downloads\user_clear.mp4"
 #video_path_0 = r"C:\Users\ldahl\Videos\WIN_20260429_16_56_29_Pro.mp4"
 
@@ -36,9 +36,6 @@ class gemini_model:
     Note: This implementation assumes the video contains the necessary visual information
     for the model to analyze and provide feedback. Does not process with respect to any
     numerical deviation scores.
-
-    Also, this implementation does not currently integrate with the VectorDatabase for contextual search,
-    but that could be added in future iterations by including relevant text from the database in the prompt.
     """
 
     def __init__(self, api_key: str):
@@ -98,7 +95,6 @@ class gemini_model:
                     continue
                 self.client.files.delete(name=video_file.name)
                 raise e
-            
 
     _BADMINTON_PATTERNS = """
 1. **Late positioning / low contact point**
@@ -146,7 +142,8 @@ class gemini_model:
 
     def get_coaching(self, deviation_scores: dict, video_path: str,
                      skill_level: str = "intermediate",
-                     sport_type: str = "badminton") -> dict | None:
+                     sport_type: str = "badminton",
+                     context: str = "") -> dict | None:
 
         checkpoints = deviation_scores.get("checkpoints", {})
 
@@ -167,6 +164,8 @@ class gemini_model:
             ])
             patterns = self._TENNIS_SERVE_PATTERNS
 
+        context_section = f"\nPAST SESSION CONTEXT (from similar sessions — reference only if relevant):\n{context}\n" if context else ""
+
         prompt = f"""You are an expert {sport_label} coach. The player's skill level is: {skill_level}.
 
 STEP 1 — WATCH THE VIDEO FIRST.
@@ -175,7 +174,7 @@ Look at the player's actual movement. Trust what you see. Your visual observatio
 STEP 2 — SUPPLEMENTARY DATA (use only to confirm or add nuance to what you observed — do not let numbers override your visual judgment):
 {checkpoint_data}
 (severity_score: 0.0 = no deviation, 1.0 = maximum deviation from reference — treat as a rough hint, not a verdict)
-
+{context_section}
 STEP 3 — IDENTIFY THE ROOT CAUSE using these common beginner mistake patterns:
 {patterns}
 
@@ -213,9 +212,6 @@ If the video is too dark, too short, or clearly not {sport_label}, set advice to
             }
         except Exception:
             return None
-    
-        #print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
-        #print(self.analyze_video(video_path, prompt))
 
 """
 my_vlm = gemini_model(API_KEY)
