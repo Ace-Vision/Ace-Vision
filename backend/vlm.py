@@ -58,18 +58,23 @@ class gemini_model:
             )
         return "\n".join(lines)
 
-    def analyze_video(self, video_path: str, prompt: str, response_schema: dict | None = None) -> str:
+    def _upload_and_wait(self, video_path: str):
+        """Upload a single video to Gemini Files API and wait until ACTIVE."""
         print(f"Uploading: {video_path}")
-        video_file = self.client.files.upload(file=video_path)
-
-        print(f"Processing (ID: {video_file.name})", end="")
-        while video_file.state.name == "PROCESSING":
+        f = self.client.files.upload(file=video_path)
+        print(f"  Processing {f.name}", end="", flush=True)
+        while f.state.name == "PROCESSING":
             print(".", end="", flush=True)
             time.sleep(2)
-            video_file = self.client.files.get(name=video_file.name)
+            f = self.client.files.get(name=f.name)
+        print()
+        if f.state.name != "ACTIVE":
+            raise ValueError(f"File {f.name} failed to reach ACTIVE: {f.state.name}")
+        return f
 
-        if video_file.state.name != "ACTIVE":
-            raise ValueError(f"Video failed to reach ACTIVE state: {video_file.state.name}")
+    def analyze_video(self, video_path: str, prompt: str, response_schema: dict | None = None) -> str:
+        """Analyse a single video file."""
+        video_file = self._upload_and_wait(video_path)
 
         config = None
         if response_schema:
@@ -81,7 +86,7 @@ class gemini_model:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                print(f"\nAnalysis Attempt {attempt + 1}...")
+                print(f"Analysis Attempt {attempt + 1}...")
                 response = self.client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=[video_file, prompt],
@@ -213,11 +218,90 @@ If the video is too dark, too short, or clearly not {sport_label}, set advice to
             }
         except Exception:
             return None
-    
-        #print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
-        #print(self.analyze_video(video_path, prompt))
 
+    def get_match_coaching(self, clip_paths: list[str],
+                           sport_type: str = "badminton") -> dict | None:
+        """
+        Analyse multiple individual shot clips from a match in one Gemini request.
+        Each clip is uploaded separately so the model sees them as distinct shots.
+        """
+        if not clip_paths:
+            return None
+
+        if sport_type == "badminton":
+            sport_label = "badminton overhead shot"
+        else:
+            sport_label = "tennis serve"
+
+        shot_count = len(clip_paths)
+
+        if sport_type == "badminton":
+            patterns = self._BADMINTON_PATTERNS
+        else:
+            patterns = self._TENNIS_SERVE_PATTERNS
+
+        prompt = f"""You are an expert {sport_label} coach reviewing {shot_count} overhead shot clips extracted from a match.
+
+Each clip shows one shot: backswing → contact → follow-through.
+
+Watch ALL clips first. Then identify the single most important thing this player needs to fix.
+Use these common patterns to anchor your diagnosis:
+{patterns}
+
+Output:
+  advice:          One focused coaching note (max 60 words). State what the player IS doing wrong, why it costs them in a match, and one concrete fix cue. End with one thing they do well.
+  pattern_id:      The number (1–5) of the pattern that best matches what you saw.
+  highlight_joint: The single joint from the list that needs the most work.
+
+If fewer than 2 clips show a clear overhead shot, set advice to "Not enough clear overhead shots to identify trends."
 """
-my_vlm = gemini_model(API_KEY)
-my_vlm.get_coaching(video_path, skill_level="intermediate")
-"""
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "advice":          {"type": "string"},
+                "pattern_id":      {"type": "integer"},
+                "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+            },
+            "required": ["advice", "pattern_id", "highlight_joint"],
+        }
+
+        uploaded = []
+        try:
+            # Upload all clips in parallel sequence, wait for each to be ACTIVE
+            for path in clip_paths:
+                uploaded.append(self._upload_and_wait(path))
+
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+            )
+
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    print(f"Match analysis attempt {attempt + 1} ({shot_count} clips)…")
+                    response = self.client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[*uploaded, prompt],
+                        config=config,
+                    )
+                    data = json.loads(response.text)
+                    return {
+                        "advice":          data.get("advice", "").strip(),
+                        "pattern_id":      data.get("pattern_id"),
+                        "highlight_joint": data.get("highlight_joint"),
+                    }
+                except Exception as e:
+                    if "503" in str(e) and attempt < max_retries - 1:
+                        time.sleep((attempt + 1) * 10)
+                        continue
+                    raise
+        except Exception:
+            return None
+        finally:
+            for f in uploaded:
+                try:
+                    self.client.files.delete(name=f.name)
+                except Exception:
+                    pass

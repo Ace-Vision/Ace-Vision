@@ -34,7 +34,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from backend.schemas import (
-    AnalyseResponse, UserCreate, UserRead, SessionRead,
+    AnalyseResponse, MatchAnalyseResponse, UserCreate, UserRead, SessionRead,
     UserRegister, UserLogin, TokenResponse,
 )
 from backend import pipeline, vlm, db
@@ -221,6 +221,56 @@ async def analyse(
         overlay_path=result["overlay_path"], sport_type=sport_type,
         overall_score=result["overall_score"], coaching=coaching,
     )
+
+
+@app.post("/analyse_match", response_model=MatchAnalyseResponse)
+async def analyse_match(
+    file: UploadFile = File(...),
+    sport_type: str = Form(...),
+):
+    if sport_type not in ("badminton", "tennis_serve"):
+        raise HTTPException(status_code=422, detail="sport_type must be badminton or tennis_serve")
+
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = await asyncio.to_thread(pipeline.run_match_pipeline, tmp_path, sport_type)
+    except Exception as exc:
+        os.unlink(tmp_path)
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    coaching = None
+    if result["clip_paths"]:
+        coaching = await asyncio.to_thread(
+            gemini.get_match_coaching,
+            result["clip_paths"], sport_type,
+        )
+
+    clip_filenames = [os.path.basename(p) for p in result["clip_paths"]]
+
+    return MatchAnalyseResponse(
+        session_id=result["session_id"],
+        sport_type=sport_type,
+        shot_count=result["shot_count"],
+        shots=result["shots"],
+        clip_filenames=clip_filenames,
+        coaching=coaching,
+    )
+
+
+@app.get("/clips/{session_id}/{filename}")
+async def get_clip(session_id: str, filename: str):
+    path = os.path.join("data", "results", session_id, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.post("/users", response_model=UserRead)

@@ -106,6 +106,7 @@ function Home() {
   // step: 'sport' | 'action' | 'loading'
   const [step, setStep] = useState('sport');
   const [sport, setSport] = useState(null);
+  const [mode, setMode] = useState(null); // 'form' | 'match'
   const [recording, setRecording] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState(null);
@@ -124,6 +125,11 @@ function Home() {
 
   function selectSport(s) {
     setSport(s);
+    setStep('mode');
+  }
+
+  function selectMode(m) {
+    setMode(m);
     setStep('action');
   }
 
@@ -135,14 +141,18 @@ function Home() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('sport_type', sport);
-      formData.append('skill_level', 'intermediate');
-      const res = await fetch(`${API_BASE}/analyse`, { method: 'POST', body: formData });
+
+      const endpoint = mode === 'match' ? '/analyse_match' : '/analyse';
+      if (mode === 'form') formData.append('skill_level', 'intermediate');
+
+      const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
       const result = await res.json();
-      navigate('/result', { state: { result, sport } });
+      const dest = mode === 'match' ? '/match-result' : '/result';
+      navigate(dest, { state: { result, sport, mode } });
     } catch (err) {
       setError(err.message);
       setStep('action');
@@ -265,16 +275,86 @@ function Home() {
     );
   }
 
+  // ── Mode selector ───────────────────────────────────────────
+  if (step === 'mode') {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-8">
+        <div className="px-5 pt-14 pb-6 flex items-center gap-3 absolute top-0 left-0 animate-fade-up-slow">
+          <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+            ‹
+          </button>
+          <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+            {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+          </span>
+        </div>
+
+        <div className="w-full flex flex-col items-center">
+          <h2
+            className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
+            style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+          >
+            What are<br />you filming?
+          </h2>
+          <p className="text-sm text-white/25 text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s' }}>
+            Choose how you want to analyze
+          </p>
+
+          <div className="w-full flex flex-col items-center gap-4">
+            {/* Form check */}
+            <button
+              onClick={() => selectMode('form')}
+              className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ animationDelay: '0.4s' }}
+            >
+              <div className="text-white font-semibold mb-1" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                Solo Swing
+              </div>
+              <div className="text-white/30 text-xs leading-relaxed">
+                Shadow swing or practice drill.<br />Analyzes your form in detail.
+              </div>
+            </button>
+
+            {/* Match analysis */}
+            <button
+              onClick={() => selectMode('match')}
+              className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ animationDelay: '0.6s' }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-white font-semibold" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                  Match
+                </span>
+                <span
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ background: 'rgba(200,255,87,0.12)', color: '#C8FF57', letterSpacing: '0.06em' }}
+                >
+                  BETA
+                </span>
+              </div>
+              <div className="text-white/30 text-xs leading-relaxed">
+                Up to 5 min match footage.<br />Detects shots and finds trends.
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Action screen (upload / record) ────────────────────────
   return (
     <div className="min-h-screen bg-black flex flex-col">
       {/* Header */}
       <div className="px-5 pt-14 pb-6 flex items-center gap-3 animate-fade-up-slow">
-        <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+        <button onClick={() => setStep('mode')} className="text-white/25 text-2xl leading-none">
           ‹
         </button>
         <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
           {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+        </span>
+        <span className="text-white/15 text-sm">·</span>
+        <span className="text-sm font-medium text-white/20" style={{ letterSpacing: '0.02em' }}>
+          {mode === 'form' ? 'Solo Swing' : 'Match'}
         </span>
       </div>
 

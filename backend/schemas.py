@@ -82,3 +82,14 @@ class AnalyseResponse(BaseModel):
     overall_score: int
     coaching: Optional[dict] = None
     model_config = ConfigDict(from_attributes=True)
+
+class MatchShotInfo(BaseModel):
+    peak_time_s: float
+
+class MatchAnalyseResponse(BaseModel):
+    session_id: str
+    sport_type: SportType
+    shot_count: int
+    shots: List[MatchShotInfo]
+    clip_filenames: List[str] = []
+    coaching: Optional[dict] = None
