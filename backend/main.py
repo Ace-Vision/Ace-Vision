@@ -40,6 +40,7 @@ from backend.schemas import (
     UserRegister, UserLogin, TokenResponse,
 )
 from backend import pipeline, vlm, db, vector_db
+from backend.upload_validation import validate_upload_metadata, validate_video_duration, MAX_BYTES
 from ml import renderer
 
 logger = logging.getLogger(__name__)
@@ -394,6 +395,33 @@ def get_user_progress(user_id: int, sport: Optional[str] = None):
     """Return mean deviation scores across all past sessions for a user."""
     vdb = vector_db.get_vlm_vector_db()
     return vdb.aggregate_scores(user_id=user_id, sport=sport)
+
+@app.get("/users/{user_id}/progress/chart")
+def get_user_progress_chart(
+    user_id: int,
+    sport: Optional[str] = None,
+    sqlite_db: Session = Depends(db.get_db),
+    current_user: db.User = Depends(get_current_user),
+):
+    """Return per-session overall scores ordered by date, for charting."""
+    query = (
+        sqlite_db.query(db.AnalysisSession)
+        .filter(db.AnalysisSession.user_id == user_id)
+    )
+    if sport:
+        query = query.filter(db.AnalysisSession.sport_type == sport)
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    sessions = query.order_by(db.AnalysisSession.created_at).all()
+    return [
+        {
+            "session_id": s.id,
+            "date": s.created_at.isoformat(),
+            "overall_score": s.overall_score,
+            "sport_type": s.sport_type,
+        }
+        for s in sessions
+    ]
 
 
 if os.path.isdir(_FRONTEND_BUILD):
