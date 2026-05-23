@@ -1,61 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
-
-// ナビゲーションをまたいで File を保持するモジュールレベルキャッシュ
-let _cachedFile = null;
 
 function MovementResult() {
   const navigate = useNavigate();
   const { state } = useLocation();
   const result = state?.result ?? {};
 
-  const { session_id, total_positions = 0, duration_s = 0,
-          rallies = [], rally_summary = {} } = result;
+  const { session_id, rallies = [], rally_summary = {} } = result;
 
-  // state に file があればキャッシュを更新、なければキャッシュから取得
-  const fileFromState = state?.file ?? null;
-  if (fileFromState) _cachedFile = fileFromState;
-  const originalFile = fileFromState ?? _cachedFile;
-
-  const originalRef = useRef(null);
-  const movementRef = useRef(null);
-
-  const [originalUrl, setOriginalUrl] = useState(null);
-  useEffect(() => {
-    if (!originalFile) return;
-    const url = URL.createObjectURL(originalFile);
-    setOriginalUrl(url);
-    return () => {
-      URL.revokeObjectURL(url);
-      setOriginalUrl(null);
-    };
-  }, [originalFile]);
-
-  // Original (master) → Court movement (slave)
-  useEffect(() => {
-    const master = originalRef.current;
-    const slave  = movementRef.current;
-    if (!master || !slave) return;
-
-    const onPlay   = () => slave.play().catch(() => {});
-    const onPause  = () => slave.pause();
-    const onSeeked = () => { slave.currentTime = master.currentTime; };
-
-    master.addEventListener('play',   onPlay);
-    master.addEventListener('pause',  onPause);
-    master.addEventListener('seeked', onSeeked);
-
-    return () => {
-      master.removeEventListener('play',   onPlay);
-      master.removeEventListener('pause',  onPause);
-      master.removeEventListener('seeked', onSeeked);
-    };
-  }, [originalUrl, session_id]);
-
-  const minutes = Math.floor(duration_s / 60);
-  const seconds = Math.round(duration_s % 60);
+  // 最終スコア: ralliesの最後のエントリから取得、なければsummaryのラリー数で代替
+  const lastRally = rallies.length > 0 ? rallies[rallies.length - 1] : null;
+  const myScore  = lastRally?.my_score  ?? rally_summary.user_wins     ?? 0;
+  const oppScore = lastRally?.opponent_score ?? rally_summary.opponent_wins ?? 0;
 
   return (
     <div className="min-h-screen bg-black pb-16">
@@ -72,54 +29,58 @@ function MovementResult() {
         </span>
       </div>
 
-      <div className="px-5 pt-4 space-y-4">
+      <div className="px-5 pt-6 space-y-6">
 
-        {/* Stats */}
-        <div className="animate-fade-up">
-          <p
-            className="font-black text-white tabular-nums"
-            style={{ fontSize: '48px', lineHeight: 1, letterSpacing: '-0.04em' }}
-          >
-            {total_positions}
-          </p>
-          <p className="text-xs text-white/25 mt-1">
-            positions tracked · {minutes}m {seconds}s
-          </p>
+        {/* Final score */}
+        <div className="animate-fade-up flex items-center justify-center gap-8 py-4">
+          <div className="text-center">
+            <p
+              className="font-black text-white tabular-nums"
+              style={{ fontSize: '64px', lineHeight: 1, letterSpacing: '-0.04em' }}
+            >
+              {myScore}
+            </p>
+            <p className="text-[11px] text-white/25 mt-2 uppercase tracking-widest">You</p>
+          </div>
+          <p className="text-3xl text-white/15 font-light mb-4">:</p>
+          <div className="text-center">
+            <p
+              className="font-black text-white tabular-nums"
+              style={{ fontSize: '64px', lineHeight: 1, letterSpacing: '-0.04em' }}
+            >
+              {oppScore}
+            </p>
+            <p className="text-[11px] text-white/25 mt-2 uppercase tracking-widest">Opponent</p>
+          </div>
         </div>
 
-        {/* Original video — master */}
-        {originalUrl && (
-          <div className="animate-fade-up rounded-2xl overflow-hidden bg-[#111] border border-white/[0.06]"
-            style={{ animationDelay: '0.05s' }}>
-            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest px-4 pt-3 pb-2">
-              Original
-            </p>
-            <video
-              key={originalUrl}
-              ref={originalRef}
-              src={originalUrl}
-              controls
-              playsInline
-              muted
-              className="w-full block"
-            />
-          </div>
-        )}
-
-        {/* Court movement — synced slave */}
+        {/* Heatmaps */}
         {session_id && (
-          <div className="animate-fade-up rounded-2xl overflow-hidden bg-[#111] border border-white/[0.06]"
-            style={{ animationDelay: '0.1s' }}>
-            <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest px-4 pt-3 pb-2">
-              Court Movement
-            </p>
-            <video
-              ref={movementRef}
-              src={`${API_BASE}/movement/${session_id}`}
-              playsInline
-              muted
-              className="w-full block"
-            />
+          <div className="animate-fade-up grid grid-cols-2 gap-3" style={{ animationDelay: '0.08s' }}>
+            <div>
+              <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-2 px-1">
+                Your wins
+              </p>
+              <div className="rounded-xl overflow-hidden bg-[#111] border border-white/[0.06]">
+                <img
+                  src={`${API_BASE}/heatmap/${session_id}/win`}
+                  alt="Win heatmap"
+                  className="w-full block"
+                />
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2 px-1">
+                Opponent wins
+              </p>
+              <div className="rounded-xl overflow-hidden bg-[#111] border border-white/[0.06]">
+                <img
+                  src={`${API_BASE}/heatmap/${session_id}/loss`}
+                  alt="Loss heatmap"
+                  className="w-full block"
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -132,7 +93,7 @@ function MovementResult() {
             }
           })}
           className="w-full py-4 rounded-2xl text-sm font-semibold transition-all animate-fade-up active:scale-95"
-          style={{ animationDelay: '0.15s', background: '#C8FF57', color: '#000' }}
+          style={{ animationDelay: '0.14s', background: '#C8FF57', color: '#000' }}
         >
           Rally Analysis →
         </button>

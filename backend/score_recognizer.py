@@ -85,6 +85,8 @@ def transcribe_segments(
         verbose=False,
         temperature=0,                   # greedy decoding → 毎回同じ結果
         condition_on_previous_text=False, # セグメント間の依存を切る → 連鎖ハリュシネーション防止
+        no_speech_threshold=0.3,         # default 0.6 → 小声のスコアアナウンスを拾うために緩める
+        logprob_threshold=-8.0,          # default -1.0 → スコア正規表現がフィルタするので緩める
     )
 
     segments = []
@@ -123,18 +125,37 @@ def _best_timestamp(seg: dict, match_start: int, match_end: int) -> float:
 
 _DIGIT_RE = re.compile(r'\d+')
 
+# "11" や "21" など、孤立した2桁数字を 1-1 / 2-1 のスコアペアとして解釈するフォールバック。
+# Whisper が "one one" → "11" と書き起こすケースに対応。
+# セグメントに他のテキストがない（スコアアナウンス専用セグメント）前提で使う。
+_ISOLATED_2DIGIT_RE = re.compile(r'^\W*(\d)(\d)\W*$')
+
 def _try_match_text(text: str, timestamp: float, out: list[dict]) -> None:
     """テキストを正規化してスコアパターンを探し、out に追記する。"""
     normalised = _normalise_numbers(text)
     # 数字が3つ以上 → Whisper の数字羅列ハリュシネーション → 除外
     if len(_DIGIT_RE.findall(normalised)) > 2:
         return
+    matched = False
     for m in _SCORE_RE.finditer(normalised):
         out.append({
             "timestamp":      timestamp,
             "my_score":       int(m.group(1)),
             "opponent_score": int(m.group(2)),
         })
+        matched = True
+
+    # フォールバック: Whisper が "one one" を "11" と書き起こした場合
+    # 生テキスト（正規化前）に対して適用することで、"eleven" → "11" の誤変換を防ぐ。
+    # Whisper が実際にアラビア数字で "11" と書いた場合だけ d0-d1 ペアとして解釈する。
+    if not matched:
+        m2 = _ISOLATED_2DIGIT_RE.match(text)
+        if m2:
+            out.append({
+                "timestamp":      timestamp,
+                "my_score":       int(m2.group(1)),
+                "opponent_score": int(m2.group(2)),
+            })
 
 
 def parse_scores(segments: list[dict]) -> list[dict]:

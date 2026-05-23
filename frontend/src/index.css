@@ -12,6 +12,11 @@
 }
 
 @layer base {
+  /* Tailwind preflight sets video { height: auto } which overrides inline height styles */
+  video {
+    height: revert;
+  }
+
   body {
     background-color: #000;
     color: #fff;
