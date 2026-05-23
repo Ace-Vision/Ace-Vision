@@ -173,6 +173,13 @@ def run_match_pipeline(video_path: str, sport_type: str) -> dict:
     shots = shot_detector.detect_shots(keypoints_list, fps)
     print(f"[match] Detected {len(shots)} overhead shot(s)")
 
+    # Step 2b: classify forehand/backhand using actual consecutive frames
+    if shots:
+        print("[match] Classifying shot types from video frames…")
+        shot_detector.classify_shots_from_video(video_path, shots, fps)
+        for i, s in enumerate(shots):
+            print(f"[match]   Shot {i+1}: {s['shot_type']} (conf={s['confidence']:.2f})")
+
     if not shots:
         return {
             "session_id": session_id,
@@ -190,12 +197,15 @@ def run_match_pipeline(video_path: str, sport_type: str) -> dict:
         clip_path = os.path.join(results_dir, f"shot_{i+1:03d}_t{shot['peak_time_s']:.1f}s.mp4")
         shot_detector.extract_clip(video_path, shot["start_frame"], shot["end_frame"], clip_path)
         clip_paths.append(clip_path)
-        print(f"[match] Shot {i+1}: peak at {shot['peak_time_s']:.1f}s → {clip_path}")
+        print(f"[match] Shot {i+1}: peak at {shot['peak_time_s']:.1f}s  "
+              f"{shot['shot_type']} (conf={shot['confidence']:.2f}) → {clip_path}")
 
     return {
         "session_id": session_id,
         "shot_count": len(shots),
         "clip_paths": clip_paths,
-        "shots": [{"peak_time_s": s["peak_time_s"]} for s in shots],
+        "shots": [{"peak_time_s": s["peak_time_s"],
+                   "shot_type":   s["shot_type"],
+                   "confidence":  s["confidence"]} for s in shots],
         "sport_type": sport_type,
     }

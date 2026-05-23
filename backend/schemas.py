@@ -85,6 +85,8 @@ class AnalyseResponse(BaseModel):
 
 class MatchShotInfo(BaseModel):
     peak_time_s: float
+    shot_type:   str = "forehand"
+    confidence:  float = 0.5
 
 class MatchAnalyseResponse(BaseModel):
     session_id: str

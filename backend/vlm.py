@@ -15,7 +15,7 @@ HIGHLIGHT_JOINTS = [
 ]
 
 """"
-Using Gemini API for video analysis. This version uses gemini-2.5-flash,
+Using Gemini API for video analysis. This version uses gemini-2.0-flash,
 which is smaller and but offers more free usage than the larger gemini-2.5-pro.
 Usually it takes a few attempts to generate since it is often busy.
 """
@@ -88,7 +88,7 @@ class gemini_model:
             try:
                 print(f"Analysis Attempt {attempt + 1}...")
                 response = self.client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=[video_file, prompt],
                     config=config,
                 )
@@ -219,85 +219,211 @@ If the video is too dark, too short, or clearly not {sport_label}, set advice to
         except Exception:
             return None
 
-    def get_match_coaching(self, clip_paths: list[str],
-                           sport_type: str = "badminton") -> dict | None:
+    _CLASSIFY_BATCH_SIZE = 5
+
+    _BADMINTON_VISUAL_CUES = """
+FOREHAND_CLEAR:
+  - Player's body is turned SIDEWAYS — non-dominant shoulder points toward the shuttle
+  - Hitting arm draws back with a HIGH ELBOW (elbow at or above shoulder, racket behind the head)
+  - Clear body ROTATION: hips and shoulders uncoil through the swing
+  - Contact point is ABOVE and slightly in front of the dominant shoulder at full arm extension
+  - Long sweeping follow-through that crosses the body downward
+
+SMASH:
+  - Same high-elbow backswing setup as forehand clear
+  - Swing is visibly faster and the racket angle is more DOWNWARD at contact
+  - Body leans FORWARD aggressively into the shot
+  - May be a JUMP SMASH — player leaves the ground before or at contact
+  - Follow-through is sharp and abbreviated compared to a clear
+
+BACKHAND:
+  - Hitting arm CROSSES the body's centre line (right arm swings to the left side or vice versa)
+  - OR the player's DOMINANT shoulder is CLOSER to the shuttle than the non-dominant shoulder at setup
+  - Elbow often leads, arm comes from the non-dominant side of the body
+  - Body rotation direction is OPPOSITE to a forehand shot
+  - Contact point tends to be more in front of the body, not at full overhead extension
+
+OTHER:
+  - Net shots, low defensive clears, drives, serves, or any clip where a clear overhead swing is not visible
+"""
+
+    _TENNIS_VISUAL_CUES = """
+FOREHAND_CLEAR (overhead smash or serve):
+  - High ball toss in front of dominant shoulder
+  - Full trophy position with high elbow
+  - Clear upward extension to contact
+
+SMASH:
+  - Opponent lob → player reaches overhead aggressively downward
+
+BACKHAND:
+  - Two-handed or one-handed backhand grip and swing
+
+OTHER:
+  - Groundstrokes, volleys, or unclear clips
+"""
+
+    def _classify_batch(self, uploaded_batch: list, global_offset: int,
+                        sport_type: str) -> list[dict]:
         """
-        Analyse multiple individual shot clips from a match in one Gemini request.
-        Each clip is uploaded separately so the model sees them as distinct shots.
+        Classify a small batch of already-uploaded clips, with retry on 503.
+        Returns list of {"index": <global>, "shot_type": <str>}.
         """
-        if not clip_paths:
-            return None
+        n = len(uploaded_batch)
+        cues = self._BADMINTON_VISUAL_CUES if sport_type == "badminton" else self._TENNIS_VISUAL_CUES
 
-        if sport_type == "badminton":
-            sport_label = "badminton overhead shot"
-        else:
-            sport_label = "tennis serve"
+        prompt = f"""You are classifying {n} badminton shot clips.
 
-        shot_count = len(clip_paths)
+The clips are presented in order. Within this batch they are numbered 0 to {n - 1}.
 
-        if sport_type == "badminton":
-            patterns = self._BADMINTON_PATTERNS
-        else:
-            patterns = self._TENNIS_SERVE_PATTERNS
+Use these visual criteria to decide:
+{cues}
 
-        prompt = f"""You are an expert {sport_label} coach reviewing {shot_count} overhead shot clips extracted from a match.
-
-Each clip shows one shot: backswing → contact → follow-through.
-
-Watch ALL clips first. Then identify the single most important thing this player needs to fix.
-Use these common patterns to anchor your diagnosis:
-{patterns}
-
-Output:
-  advice:          One focused coaching note (max 60 words). State what the player IS doing wrong, why it costs them in a match, and one concrete fix cue. End with one thing they do well.
-  pattern_id:      The number (1–5) of the pattern that best matches what you saw.
-  highlight_joint: The single joint from the list that needs the most work.
-
-If fewer than 2 clips show a clear overhead shot, set advice to "Not enough clear overhead shots to identify trends."
+Rules:
+- Output exactly {n} classifications, one per clip, in order (index 0, 1, 2 …).
+- Be decisive — choose the closest match even if the clip is ambiguous.
+- Do NOT skip any clip.
 """
 
         schema = {
             "type": "object",
             "properties": {
-                "advice":          {"type": "string"},
-                "pattern_id":      {"type": "integer"},
-                "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+                "classifications": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "index":     {"type": "integer"},
+                            "shot_type": {"type": "string",
+                                          "enum": ["forehand_clear", "smash", "backhand", "other"]},
+                        },
+                        "required": ["index", "shot_type"],
+                    },
+                },
             },
-            "required": ["advice", "pattern_id", "highlight_joint"],
+            "required": ["classifications"],
         }
+
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+        )
+
+        for attempt in range(4):
+            try:
+                response = self.client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[*uploaded_batch, prompt],
+                    config=config,
+                )
+                data = json.loads(response.text)
+                results = []
+                for item in data.get("classifications", []):
+                    local_idx = item.get("index", 0)
+                    results.append({
+                        "index":     global_offset + local_idx,
+                        "shot_type": item.get("shot_type", "other"),
+                    })
+                return results
+            except Exception as e:
+                if "503" in str(e) and attempt < 3:
+                    wait = (attempt + 1) * 15
+                    print(f"  503 on batch, retrying in {wait}s…")
+                    time.sleep(wait)
+                    continue
+                raise
+
+    def get_match_coaching(self, clip_paths: list[str],
+                           sport_type: str = "badminton") -> dict | None:
+        """
+        1. Upload all clips.
+        2. Classify in batches of CLASSIFY_BATCH_SIZE (small enough for accurate labelling).
+        3. One coaching call across all clips for the key advice.
+        """
+        if not clip_paths:
+            return None
+
+        sport_label = "badminton overhead shot" if sport_type == "badminton" else "tennis serve"
+        patterns    = self._BADMINTON_PATTERNS if sport_type == "badminton" else self._TENNIS_SERVE_PATTERNS
+        shot_count  = len(clip_paths)
 
         uploaded = []
         try:
-            # Upload all clips in parallel sequence, wait for each to be ACTIVE
             for path in clip_paths:
                 uploaded.append(self._upload_and_wait(path))
 
+            # ── Step 1: classify in small batches ──────────────────────────
+            all_classifications = []
+            for start in range(0, len(uploaded), self._CLASSIFY_BATCH_SIZE):
+                batch = uploaded[start:start + self._CLASSIFY_BATCH_SIZE]
+                print(f"Classifying clips {start}–{start + len(batch) - 1}…")
+                try:
+                    results = self._classify_batch(batch, start, sport_type)
+                    all_classifications.extend(results)
+                    print(f"  → {[r['shot_type'] for r in results]}")
+                except Exception as e:
+                    print(f"  Batch classification failed: {e} — marking as 'other'")
+                    for i in range(len(batch)):
+                        all_classifications.append({"index": start + i, "shot_type": "other"})
+                # brief pause between batches to avoid rate limiting
+                if start + self._CLASSIFY_BATCH_SIZE < len(uploaded):
+                    time.sleep(5)
+
+            # ── Step 2: coaching across all clips ──────────────────────────
+            coaching_prompt = f"""You are an expert {sport_label} coach reviewing {shot_count} overhead shot clips from a match.
+
+Each clip: backswing → contact → follow-through.
+
+Watch ALL clips. Identify the single most important thing this player needs to fix.
+Reference patterns:
+{patterns}
+
+Output:
+  advice:          Max 60 words. What they do wrong, why it matters in a match, one fix cue. End with one positive.
+  pattern_id:      Number 1–5 matching the main pattern.
+  highlight_joint: Joint needing the most work.
+
+If fewer than 2 clips show a clear overhead, set advice to "Not enough clear overhead shots to identify trends."
+"""
+
+            coaching_schema = {
+                "type": "object",
+                "properties": {
+                    "advice":          {"type": "string"},
+                    "pattern_id":      {"type": "integer"},
+                    "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+                },
+                "required": ["advice", "pattern_id", "highlight_joint"],
+            }
+
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=schema,
+                response_schema=coaching_schema,
             )
 
-            max_retries = 3
-            for attempt in range(max_retries):
+            for attempt in range(3):
                 try:
-                    print(f"Match analysis attempt {attempt + 1} ({shot_count} clips)…")
+                    print(f"Coaching attempt {attempt + 1}…")
                     response = self.client.models.generate_content(
-                        model="gemini-2.5-flash",
-                        contents=[*uploaded, prompt],
+                        model="gemini-2.0-flash",
+                        contents=[*uploaded, coaching_prompt],
                         config=config,
                     )
                     data = json.loads(response.text)
                     return {
+                        "clips":           all_classifications,
                         "advice":          data.get("advice", "").strip(),
                         "pattern_id":      data.get("pattern_id"),
                         "highlight_joint": data.get("highlight_joint"),
                     }
                 except Exception as e:
-                    if "503" in str(e) and attempt < max_retries - 1:
+                    if "503" in str(e) and attempt < 2:
                         time.sleep((attempt + 1) * 10)
                         continue
                     raise
-        except Exception:
+
+        except Exception as e:
+            print(f"get_match_coaching failed: {e}")
             return None
         finally:
             for f in uploaded:

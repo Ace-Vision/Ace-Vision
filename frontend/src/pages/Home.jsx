@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactDOM from 'react-dom';
+import CourtCalibrator from '../components/CourtCalibrator';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -103,13 +104,15 @@ function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
 
 function Home() {
   const navigate = useNavigate();
-  // step: 'sport' | 'action' | 'loading'
+  // step: 'sport' | 'mode' | 'action' | 'calibrate' | 'loading'
   const [step, setStep] = useState('sport');
   const [sport, setSport] = useState(null);
   const [mode, setMode] = useState(null); // 'form' | 'match'
   const [recording, setRecording] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState(null);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [courtCorners, setCourtCorners] = useState(null);
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -133,17 +136,35 @@ function Home() {
     setStep('action');
   }
 
-  async function uploadFile(file) {
+  function handleFileSelected(file) {
+    if (mode === 'match') {
+      setPendingFile(file);
+      setStep('calibrate');
+    } else {
+      uploadFile(file);
+    }
+  }
+
+  async function uploadFile(file, corners = null) {
     setCameraOpen(false);
     setStep('loading');
     setError(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('sport_type', sport);
 
-      const endpoint = mode === 'match' ? '/analyse_match' : '/analyse';
-      if (mode === 'form') formData.append('skill_level', 'intermediate');
+      let endpoint, dest;
+      if (mode === 'match') {
+        endpoint = '/analyse_movement';
+        dest     = '/movement-result';
+        formData.append('sport_type', sport);
+        if (corners) formData.append('court_corners', JSON.stringify(corners));
+      } else {
+        endpoint = '/analyse';
+        dest     = '/result';
+        formData.append('sport_type', sport);
+        formData.append('skill_level', 'intermediate');
+      }
 
       const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData });
       if (!res.ok) {
@@ -151,8 +172,7 @@ function Home() {
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
       const result = await res.json();
-      const dest = mode === 'match' ? '/match-result' : '/result';
-      navigate(dest, { state: { result, sport, mode } });
+      navigate(dest, { state: { result, sport, mode, file } });
     } catch (err) {
       setError(err.message);
       setStep('action');
@@ -186,7 +206,7 @@ function Home() {
       streamRef.current = null;
       setCameraOpen(false);
       setRecording(false);
-      await uploadFile(new File([blob], `recording.${ext}`, { type: mimeType }));
+      handleFileSelected(new File([blob], `recording.${ext}`, { type: mimeType }));
     };
     recorder.start();
     mediaRecorderRef.current = recorder;
@@ -202,6 +222,20 @@ function Home() {
     streamRef.current = null;
     setCameraOpen(false);
     setRecording(false);
+  }
+
+  // ── Court calibration ───────────────────────────────────────
+  if (step === 'calibrate' && pendingFile) {
+    return (
+      <CourtCalibrator
+        videoFile={pendingFile}
+        onConfirm={(corners) => {
+          setCourtCorners(corners);
+          uploadFile(pendingFile, corners);
+        }}
+        onBack={() => { setPendingFile(null); setStep('action'); }}
+      />
+    );
   }
 
   // ── Loading screen ──────────────────────────────────────────
@@ -335,6 +369,7 @@ function Home() {
                 Up to 5 min match footage.<br />Detects shots and finds trends.
               </div>
             </button>
+
           </div>
         </div>
       </div>
@@ -349,10 +384,14 @@ function Home() {
         <button onClick={() => setStep('mode')} className="text-white/25 text-2xl leading-none">
           ‹
         </button>
-        <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
-          {sport === 'badminton' ? 'Badminton' : 'Tennis'}
-        </span>
-        <span className="text-white/15 text-sm">·</span>
+        {mode !== 'score' && (
+          <>
+            <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+              {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+            </span>
+            <span className="text-white/15 text-sm">·</span>
+          </>
+        )}
         <span className="text-sm font-medium text-white/20" style={{ letterSpacing: '0.02em' }}>
           {mode === 'form' ? 'Solo Swing' : 'Match'}
         </span>
@@ -374,7 +413,7 @@ function Home() {
           type="file"
           accept="video/mp4,video/quicktime,video/webm"
           className="hidden"
-          onChange={e => { const f = e.target.files[0]; if (f) uploadFile(f); }}
+          onChange={e => { const f = e.target.files[0]; if (f) handleFileSelected(f); }}
         />
 
         {/* Record Video */}

@@ -37,7 +37,7 @@ from backend.schemas import (
     AnalyseResponse, MatchAnalyseResponse, UserCreate, UserRead, SessionRead,
     UserRegister, UserLogin, TokenResponse,
 )
-from backend import pipeline, vlm, db
+from backend import pipeline, vlm, db, court_tracker, score_recognizer
 from ml import renderer
 
 SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production")
@@ -271,6 +271,224 @@ async def get_clip(session_id: str, filename: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/analyse_movement")
+async def analyse_movement(
+    file: UploadFile = File(...),
+    sport_type: str = Form("badminton"),
+    court_corners: str = Form(...),
+):
+    import json
+    try:
+        corners = json.loads(court_corners)
+    except Exception:
+        raise HTTPException(status_code=422, detail="court_corners must be valid JSON")
+    if len(corners) != 4:
+        raise HTTPException(status_code=422, detail="court_corners must have exactly 4 points")
+
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    # 1) Court movement analysis
+    try:
+        court_result = await asyncio.to_thread(
+            court_tracker.run_court_analysis, tmp_path, corners
+        )
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    session_id = court_result["session_id"]
+
+    # 2) Score recognition — 失敗しても足跡分析は返す
+    try:
+        score_result = await asyncio.to_thread(
+            score_recognizer.run_score_analysis, tmp_path, "medium", "en", session_id
+        )
+        rallies       = score_result["rallies"]
+        rally_summary = score_result["summary"]
+    except Exception:
+        import traceback; traceback.print_exc()
+        rallies       = []
+        rally_summary = {"user_wins": 0, "opponent_wins": 0, "total_rallies": 0}
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    # 3) Heatmap — 失敗しても他の結果は返す
+    try:
+        await asyncio.to_thread(
+            court_tracker.generate_heatmap,
+            court_result["_positions"],
+            court_result["_H"],
+            court_result["_video_w"],
+            court_result["_video_h"],
+            court_result["_fps"],
+            rallies,
+            session_id,
+        )
+    except Exception:
+        import traceback; traceback.print_exc()
+
+    return {
+        "session_id":      session_id,
+        "sport_type":      sport_type,
+        "total_positions": court_result["total_positions"],
+        "duration_s":      court_result["duration_s"],
+        "rallies":         rallies,
+        "rally_summary":   rally_summary,
+    }
+
+
+@app.get("/movement/{session_id}")
+async def get_movement_video(session_id: str):
+    path = os.path.join("data", "results", session_id, "movement.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Movement video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+@app.get("/heatmap/{session_id}/{which}")
+async def get_heatmap(session_id: str, which: str):
+    if which not in ("win", "loss"):
+        raise HTTPException(status_code=422, detail="which must be 'win' or 'loss'")
+    path = os.path.join("data", "results", session_id, f"heatmap_{which}.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Heatmap not found")
+    return FileResponse(path, media_type="image/png")
+
+@app.get("/debug/{session_id}")
+async def get_debug_video(session_id: str):
+    path = os.path.join("data", "results", session_id, "debug.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Debug video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/analyse_score")
+async def analyse_score(
+    file: UploadFile = File(...),
+    model_size: str = Form("medium"),
+    language: str = Form("en"),
+):
+    """
+    動画からスコアを認識し、ラリーごとにクリップを切り出して返す。
+
+    Returns:
+        { session_id, rallies: [{index, start_s, end_s, my_score, opponent_score,
+                                 rally_winner, clip_filename}], summary }
+    """
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = await asyncio.to_thread(
+            score_recognizer.run_score_analysis,
+            tmp_path, model_size, language,
+        )
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return result
+
+
+@app.get("/rally_clip/{session_id}/{filename}")
+async def get_rally_clip(session_id: str, filename: str):
+    path = os.path.join("data", "results", session_id, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/rally_label")
+async def set_rally_label(body: dict):
+    import json as _json
+    session_id  = body.get("session_id")
+    rally_index = body.get("rally_index")
+    label       = body.get("label")
+
+    if not session_id or rally_index is None:
+        raise HTTPException(status_code=422, detail="session_id and rally_index required")
+
+    labels_path = os.path.join("data", "results", session_id, "labels.json")
+    labels: dict = {}
+    if os.path.exists(labels_path):
+        with open(labels_path) as f:
+            labels = _json.load(f)
+
+    if label is None:
+        labels.pop(str(rally_index), None)
+    else:
+        labels[str(rally_index)] = label
+
+    with open(labels_path, "w") as f:
+        _json.dump(labels, f)
+
+    return {"ok": True}
+
+
+@app.get("/rally_labels/{session_id}")
+async def get_rally_labels(session_id: str):
+    import json as _json
+    labels_path = os.path.join("data", "results", session_id, "labels.json")
+    if not os.path.exists(labels_path):
+        return {"labels": {}}
+    with open(labels_path) as f:
+        return {"labels": _json.load(f)}
+
+
+@app.post("/recognise_scores")
+async def recognise_scores(
+    file: UploadFile = File(...),
+    model_size: str = Form("medium"),
+    language: str = Form("en"),
+    include_transcript: bool = Form(False),
+):
+    """
+    動画ファイルから読み上げられたスコアを認識し、ラリー勝敗を返す。
+
+    Returns:
+        {
+            "rallies": [{"timestamp", "my_score", "opponent_score", "rally_winner"}, ...],
+            "summary": {"user_wins", "opponent_wins", "total_rallies"},
+            "segments": [...],   # include_transcript=True のときのみ
+        }
+    """
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        if include_transcript:
+            result = await asyncio.to_thread(
+                score_recognizer.recognize_scores_with_transcript,
+                tmp_path, model_size, language,
+            )
+        else:
+            scores = await asyncio.to_thread(
+                score_recognizer.recognize_scores,
+                tmp_path, model_size, language,
+            )
+            result = {"scores": scores}
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return result
 
 
 @app.post("/users", response_model=UserRead)
