@@ -8,6 +8,7 @@ When two people are detected, we simply pick the one with larger hip-y.
 This is simpler and more robust than velocity-based ID tracking.
 """
 
+import json
 import os
 import uuid
 import math
@@ -451,6 +452,136 @@ def generate_movement_video(
     return out_path
 
 
+# ── Phase analysis ────────────────────────────────────────────────────────────
+
+def _render_phase_heatmap(court_pts: list, out_path: str) -> None:
+    """Render a density heatmap for a single phase's court positions."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    grid = np.zeros((COURT_H, COURT_W), dtype=np.float32)
+    for x, y in court_pts:
+        ix = int(np.clip(x, 0, COURT_W - 1))
+        iy = int(np.clip(y, 0, COURT_H - 1))
+        grid[iy, ix] += 1
+
+    if grid.max() > 0:
+        sigma = 18
+        ksize = int(sigma * 6) | 1
+        grid = cv2.GaussianBlur(grid, (ksize, ksize), sigma)
+
+    court_rgb = cv2.cvtColor(_draw_court(COURT_W, COURT_H), cv2.COLOR_BGR2RGB)
+    fig = Figure(figsize=(COURT_W / 100, COURT_H / 100), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(court_rgb, extent=[0, COURT_W, COURT_H, 0], aspect="auto")
+    if grid.max() > 0:
+        ax.imshow(grid, extent=[0, COURT_W, COURT_H, 0],
+                  cmap="YlGn", alpha=0.75, vmin=0, vmax=grid.max(),
+                  aspect="auto", interpolation="bilinear")
+    ax.set_xlim(0, COURT_W)
+    ax.set_ylim(COURT_H, 0)
+    ax.axis("off")
+    fig.savefig(out_path, dpi=100, bbox_inches="tight", pad_inches=0, facecolor="#111111")
+
+
+def generate_phase_analysis(
+    positions: list,
+    H: np.ndarray,
+    video_w: int,
+    video_h: int,
+    session_id: str,
+) -> dict | None:
+    """
+    試合を3つの等時間フェーズに分割し、各フェーズのヒートマップと
+    カバレッジ指標を計算する。カバレッジが終盤に著しく低下した場合、
+    体力不足の可能性として flagging する。
+
+    カバレッジ指標 = std_x × std_y (コート座標空間の分布面積の代理指標)
+
+    Returns:
+        {
+            "phases": [{"phase": int, "start_s": float, "end_s": float,
+                        "coverage_pct": float}, ...],
+            "stamina_flag": bool,
+            "coverage_trend": [float, float, float],   # 正規化済み %
+        }
+        または None (データ不足)
+    """
+    valid = [(p["time_s"], p) for p in positions if p is not None]
+    if len(valid) < 15:
+        return None
+
+    t_start = valid[0][0]
+    t_end   = valid[-1][0]
+    duration = t_end - t_start
+    if duration < 10:
+        return None
+
+    phase_len = duration / 3
+    boundaries = [
+        (t_start,               t_start + phase_len),
+        (t_start + phase_len,   t_start + 2 * phase_len),
+        (t_start + 2 * phase_len, t_end),
+    ]
+
+    out_dir = os.path.join("data", "results", session_id)
+    os.makedirs(out_dir, exist_ok=True)
+
+    raw_coverages: list[float] = []
+    phases_out: list[dict] = []
+
+    for idx, (s, e) in enumerate(boundaries):
+        phase_num = idx + 1
+        phase_positions = [p for t, p in valid if s <= t <= e]
+
+        court_pts: list[tuple[int, int]] = []
+        for p in phase_positions:
+            xy = _transform_point(p, H, video_w, video_h)
+            if xy is not None and 0 <= xy[0] <= COURT_W and 0 <= xy[1] <= COURT_H:
+                court_pts.append(xy)
+
+        if len(court_pts) >= 3:
+            xs = [p[0] for p in court_pts]
+            ys = [p[1] for p in court_pts]
+            cov = float(np.std(xs) * np.std(ys))
+        else:
+            cov = 0.0
+        raw_coverages.append(cov)
+
+        heatmap_path = os.path.join(out_dir, f"heatmap_phase_{phase_num}.png")
+        _render_phase_heatmap(court_pts, heatmap_path)
+
+        phases_out.append({
+            "phase":   phase_num,
+            "start_s": round(s, 1),
+            "end_s":   round(e, 1),
+        })
+
+    # 最大値で正規化した %
+    max_cov = max(raw_coverages) if max(raw_coverages) > 0 else 1.0
+    coverage_trend = [round(c / max_cov * 100, 1) for c in raw_coverages]
+
+    for i, p in enumerate(phases_out):
+        p["coverage_pct"] = coverage_trend[i]
+
+    # 体力フラグ: フェーズ3のカバレッジがフェーズ1の65%未満
+    stamina_flag = (raw_coverages[0] > 0 and
+                    raw_coverages[2] / raw_coverages[0] < 0.65)
+
+    result = {
+        "phases":         phases_out,
+        "stamina_flag":   stamina_flag,
+        "coverage_trend": coverage_trend,
+    }
+
+    with open(os.path.join(out_dir, "phase_analysis.json"), "w") as f:
+        json.dump(result, f)
+
+    print(f"[phase] coverage trend: {coverage_trend}, stamina_flag={stamina_flag}")
+    return result
+
+
 # ── Heatmap ───────────────────────────────────────────────────────────────────
 
 def generate_heatmap(
@@ -577,11 +708,32 @@ def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
     )
     print(f"[movement] Done → {out_path}")
 
+    # Save court-transformed positions for frontend minimap
+    court_pts_export = []
+    for p in positions:
+        if p is None:
+            continue
+        xy = _transform_point(p, H, video_w, video_h)
+        if xy is not None:
+            court_pts_export.append({
+                "time_s": round(p["time_s"], 3),
+                "cx": int(xy[0]),
+                "cy": int(xy[1]),
+            })
+    results_dir = os.path.join("data", "results", session_id)
+    os.makedirs(results_dir, exist_ok=True)
+    with open(os.path.join(results_dir, "positions.json"), "w") as _pf:
+        json.dump(court_pts_export, _pf)
+
+    print("[movement] Running phase analysis…")
+    phase_analysis = generate_phase_analysis(positions, H, video_w, video_h, session_id)
+
     return {
         "session_id":          session_id,
         "movement_video_path": out_path,
         "total_positions":     sum(1 for p in positions if p is not None),
         "duration_s":          round(len(positions) * MOVEMENT_STRIDE / fps, 1),
+        "phase_analysis":      phase_analysis,
         # ヒートマップ生成用の内部データ（main.py が使用）
         "_positions": positions,
         "_H":         H,

@@ -113,6 +113,8 @@ function Home() {
   const [error, setError] = useState(null);
   const [pendingFile, setPendingFile] = useState(null);
   const [courtCorners, setCourtCorners] = useState(null);
+  const [opponentName, setOpponentName] = useState('');
+  const [matchComment, setMatchComment] = useState('');
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -172,7 +174,7 @@ function Home() {
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
       const result = await res.json();
-      navigate(dest, { state: { result, sport, mode, file } });
+      navigate(dest, { state: { result, sport, mode, file, opponentName, matchComment } });
     } catch (err) {
       setError(err.message);
       setStep('action');
@@ -241,26 +243,38 @@ function Home() {
   // ── Loading screen ──────────────────────────────────────────
   if (step === 'loading') {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-8">
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-8 px-6">
         <div className="flex flex-col items-center">
-          <h1
-            className="text-[44px] font-bold text-white leading-none"
-            style={{ letterSpacing: '-0.03em' }}
-          >
-            ACE
-          </h1>
-          <h1
-            className="text-[44px] font-bold leading-none"
-            style={{ letterSpacing: '-0.03em', color: '#C8FF57' }}
-          >
-            VISION
-          </h1>
+          <h1 className="text-[44px] font-bold text-white leading-none" style={{ letterSpacing: '-0.03em' }}>ACE</h1>
+          <h1 className="text-[44px] font-bold leading-none" style={{ letterSpacing: '-0.03em', color: '#C8FF57' }}>VISION</h1>
         </div>
+
+        {mode === 'match' && (
+          <div className="w-full max-w-sm space-y-3">
+            <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest text-center">
+              While we analyze · fill these in
+            </p>
+            <input
+              type="text"
+              placeholder="Opponent's name (optional)"
+              value={opponentName}
+              onChange={e => setOpponentName(e.target.value)}
+              className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            />
+            <textarea
+              placeholder="How did the match feel? Any thoughts… (optional)"
+              value={matchComment}
+              onChange={e => setMatchComment(e.target.value)}
+              rows={3}
+              className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none resize-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            />
+          </div>
+        )}
+
         <div className="flex flex-col items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-full border-2 border-white/10 border-t-[#C8FF57]"
-            style={{ animation: 'spin 1s linear infinite' }}
-          />
+          <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-[#C8FF57]" style={{ animation: 'spin 1s linear infinite' }} />
           <p className="text-xs font-medium text-white/30 tracking-widest uppercase">Analyzing</p>
         </div>
         {error && <p className="text-sm text-red-400 px-6 text-center">{error}</p>}

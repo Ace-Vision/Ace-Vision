@@ -431,3 +431,61 @@ If fewer than 2 clips show a clear overhead, set advice to "Not enough clear ove
                     self.client.files.delete(name=f.name)
                 except Exception:
                     pass
+
+    def get_rally_coaching(self, session_data: dict) -> str | None:
+        """
+        Text-only coaching feedback for a match, based on rally tags + user notes.
+        No video upload needed.
+        """
+        user_wins     = session_data.get("user_wins", 0)
+        opp_wins      = session_data.get("opponent_wins", 0)
+        total         = session_data.get("total_rallies", 0)
+        opponent_name = (session_data.get("opponent_name") or "").strip()
+        match_comment = (session_data.get("match_comment") or "").strip()
+        sport_type    = session_data.get("sport_type", "badminton")
+        loss_tags     = session_data.get("loss_tags", {})
+        rally_notes   = session_data.get("rally_notes", {})
+
+        swing_miss   = sum(1 for v in loss_tags.values() if v == "swing_miss")
+        bad_footwork = sum(1 for v in loss_tags.values() if v == "bad_footwork")
+        other_tag    = sum(1 for v in loss_tags.values() if v == "other")
+        untagged     = max(0, opp_wins - swing_miss - bad_footwork - other_tag)
+
+        notes_lines = [
+            f"  Rally {int(i)+1}: {n.strip()}"
+            for i, n in sorted(rally_notes.items(), key=lambda x: int(x[0]))
+            if n.strip()
+        ]
+        notes_block = "\n".join(notes_lines) if notes_lines else "  (none)"
+
+        sport_label = "badminton" if sport_type == "badminton" else "tennis"
+
+        prompt = f"""You are an expert {sport_label} coach reviewing a match.
+
+MATCH RESULT:
+  Score: {user_wins} wins – {opp_wins} losses ({total} rallies total)
+{"  Opponent: " + opponent_name if opponent_name else ""}
+{"  Player's own thoughts: " + match_comment if match_comment else ""}
+
+LOSS BREAKDOWN ({opp_wins} points lost):
+  Swing miss:    {swing_miss}
+  Bad footwork:  {bad_footwork}
+  Other:         {other_tag}
+  Untagged:      {untagged}
+
+PLAYER NOTES ON INDIVIDUAL RALLIES:
+{notes_block}
+
+Write coaching feedback that will genuinely help this player grow. Follow this structure exactly:
+- Paragraph 1 (2–3 sentences): Name the single most important pattern from the loss data. Be specific — what is the player doing wrong and why does it cost them points?
+- Paragraph 2 (1–2 sentences): Give one concrete drill or cue to fix it.
+- Final sentence: Acknowledge one positive from the match, then set a clear goal for the next session.
+
+Be direct, warm, and specific. 100–140 words total. No bullet points."""
+
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+        )
+        text = (response.text or "").strip()
+        return text if text else None

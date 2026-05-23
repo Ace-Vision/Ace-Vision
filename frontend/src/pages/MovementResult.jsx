@@ -5,9 +5,12 @@ const API_BASE = process.env.REACT_APP_API_URL || '';
 function MovementResult() {
   const navigate = useNavigate();
   const { state } = useLocation();
-  const result = state?.result ?? {};
+  const result       = state?.result ?? {};
+  const opponentName = state?.opponentName ?? '';
+  const matchComment = state?.matchComment ?? '';
+  const sport        = state?.sport ?? 'badminton';
 
-  const { session_id, rallies = [], rally_summary = {} } = result;
+  const { session_id, rallies = [], rally_summary = {}, phase_analysis = null } = result;
 
   // 最終スコア: ralliesの最後のエントリから取得、なければsummaryのラリー数で代替
   const lastRally = rallies.length > 0 ? rallies[rallies.length - 1] : null;
@@ -84,12 +87,92 @@ function MovementResult() {
           </div>
         )}
 
+        {/* Phase Analysis */}
+        {phase_analysis && session_id && (
+          <div className="animate-fade-up space-y-3" style={{ animationDelay: '0.12s' }}>
+            <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest">
+              Movement by Phase
+            </p>
+
+            <div className="grid grid-cols-3 gap-2">
+              {phase_analysis.phases.map((phase, i) => {
+                const pct = phase.coverage_pct;
+                const isLate = i === 2;
+                const flagged = isLate && phase_analysis.stamina_flag;
+                return (
+                  <div key={i}>
+                    <div className="flex items-center justify-between px-0.5 mb-1.5">
+                      <span className="text-[9px] text-white/25 uppercase tracking-wider">
+                        {i === 0 ? 'Early' : i === 1 ? 'Mid' : 'Late'}
+                      </span>
+                      <span
+                        className="text-[10px] font-bold tabular-nums"
+                        style={{ color: flagged ? '#FF6B6B' : 'rgba(255,255,255,0.35)' }}
+                      >
+                        {pct}%
+                      </span>
+                    </div>
+                    <div className="rounded-xl overflow-hidden bg-[#111] border"
+                      style={{ borderColor: flagged ? 'rgba(255,107,107,0.3)' : 'rgba(255,255,255,0.06)' }}>
+                      <img
+                        src={`${API_BASE}/phase_heatmap/${session_id}/${phase.phase}`}
+                        alt={`Phase ${phase.phase}`}
+                        className="w-full block"
+                      />
+                    </div>
+                    {/* Coverage bar */}
+                    <div className="mt-1.5 h-0.5 rounded-full bg-white/[0.06] overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${pct}%`,
+                          background: flagged ? '#FF6B6B' : i === 0 ? '#C8FF57' : 'rgba(255,255,255,0.25)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {phase_analysis.stamina_flag ? (
+              <div
+                className="rounded-2xl p-4 space-y-2"
+                style={{ background: 'rgba(255,60,60,0.10)', border: '1px solid rgba(255,60,60,0.45)' }}
+              >
+                <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#FF3C3C' }}>
+                  ⚠ Stamina Alert
+                </p>
+                <p className="text-xs font-semibold leading-relaxed" style={{ color: 'rgba(255,100,100,0.85)' }}>
+                  Your court coverage dropped from {phase_analysis.coverage_trend[0]}% early on to {phase_analysis.coverage_trend[2]}% in the final phase.
+                  Fatigue may be limiting your movement — add cardio sessions and footwork endurance drills to your training routine.
+                </p>
+              </div>
+            ) : (
+              <div
+                className="rounded-2xl p-4 space-y-2"
+                style={{ background: 'rgba(200,255,87,0.07)', border: '1px solid rgba(200,255,87,0.25)' }}
+              >
+                <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#C8FF57' }}>
+                  ✓ Stamina Good
+                </p>
+                <p className="text-xs font-semibold leading-relaxed" style={{ color: 'rgba(200,255,87,0.70)' }}>
+                  Court coverage remained consistent across all three phases — no signs of stamina decline detected.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Rally Analysis */}
         <button
           onClick={() => navigate('/rally-result', {
             state: {
               result:         { session_id, rallies, summary: rally_summary },
               movementResult: result,
+              opponentName,
+              matchComment,
+              sport,
             }
           })}
           className="w-full py-4 rounded-2xl text-sm font-semibold transition-all animate-fade-up active:scale-95"

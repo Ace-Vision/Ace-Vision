@@ -342,7 +342,18 @@ async def analyse_movement(
         "duration_s":      court_result["duration_s"],
         "rallies":         rallies,
         "rally_summary":   rally_summary,
+        "phase_analysis":  court_result.get("phase_analysis"),
     }
+
+
+@app.get("/phase_heatmap/{session_id}/{phase_num}")
+async def get_phase_heatmap(session_id: str, phase_num: int):
+    if phase_num not in (1, 2, 3):
+        raise HTTPException(status_code=422, detail="phase_num must be 1, 2, or 3")
+    path = os.path.join("data", "results", session_id, f"heatmap_phase_{phase_num}.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Phase heatmap not found")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/movement/{session_id}")
@@ -367,6 +378,45 @@ async def get_debug_video(session_id: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Debug video not found")
     return FileResponse(path, media_type="video/mp4")
+
+@app.get("/court_positions/{session_id}")
+async def get_court_positions(session_id: str):
+    import json as _json
+    path = os.path.join("data", "results", session_id, "positions.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Position data not found")
+    with open(path) as f:
+        return _json.load(f)
+
+@app.post("/rally_coaching")
+async def get_rally_coaching(body: dict):
+    import json as _json
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="session_id required")
+
+    # Return cached feedback if available
+    cache_path = os.path.join("data", "results", session_id, "coaching.json")
+    if os.path.exists(cache_path):
+        with open(cache_path) as f:
+            return _json.load(f)
+
+    try:
+        feedback = await asyncio.to_thread(gemini.get_rally_coaching, body)
+    except Exception as exc:
+        err = str(exc)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            raise HTTPException(status_code=429, detail="quota_exceeded")
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+
+    if feedback is None:
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+
+    result = {"feedback": feedback}
+    os.makedirs(os.path.join("data", "results", session_id), exist_ok=True)
+    with open(cache_path, "w") as f:
+        _json.dump(result, f)
+    return result
 
 
 @app.post("/analyse_score")

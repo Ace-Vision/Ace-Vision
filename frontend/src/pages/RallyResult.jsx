@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
@@ -8,6 +8,130 @@ const LABEL_OPTIONS = [
   { value: 'bad_footwork', label: 'Bad Footwork' },
   { value: 'other',        label: 'Other' },
 ];
+
+// ── Court minimap ─────────────────────────────────────────────────────────────
+
+const COURT_BW = 400; // backend court width
+const COURT_BH = 440; // backend court height
+const TRAIL_LEN = 18; // number of past positions to show
+
+function drawMinimap(canvas, positions, absoluteTime, startS, endS) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+
+  const pad = Math.round(W * 0.08);
+  const cw  = W - 2 * pad;
+  const ch  = H - 2 * pad;
+
+  // Outer court
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(pad, pad, cw, ch);
+
+  // Net (top edge, thicker)
+  ctx.strokeStyle = 'rgba(255,255,255,0.40)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(pad, pad);
+  ctx.lineTo(pad + cw, pad);
+  ctx.stroke();
+
+  // Service line
+  const svcY = pad + Math.round(ch / 3);
+  ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, svcY);
+  ctx.lineTo(pad + cw, svcY);
+  ctx.stroke();
+
+  // Center line (service box divider)
+  ctx.beginPath();
+  ctx.moveTo(pad + cw / 2, svcY);
+  ctx.lineTo(pad + cw / 2, pad + ch);
+  ctx.stroke();
+
+  // Filter to this rally's time window
+  const pts = positions.filter(p => p.time_s >= startS && p.time_s <= endS);
+  if (!pts.length) return;
+
+  // Find index of closest position to absoluteTime
+  let curIdx = 0;
+  let minDiff = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const d = Math.abs(pts[i].time_s - absoluteTime);
+    if (d < minDiff) { minDiff = d; curIdx = i; }
+  }
+
+  // Trail
+  const trailStart = Math.max(0, curIdx - TRAIL_LEN);
+  for (let i = trailStart; i < curIdx; i++) {
+    const alpha = (i - trailStart + 1) / (curIdx - trailStart + 1);
+    const p = pts[i];
+    const x = pad + (p.cx / COURT_BW) * cw;
+    const y = pad + (p.cy / COURT_BH) * ch;
+    ctx.fillStyle = `rgba(200,255,87,${alpha * 0.35})`;
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1.5, 3 * alpha), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Current dot
+  const cur = pts[curIdx];
+  const dx = pad + (cur.cx / COURT_BW) * cw;
+  const dy = pad + (cur.cy / COURT_BH) * ch;
+
+  ctx.fillStyle = 'rgba(200,255,87,0.18)';
+  ctx.beginPath();
+  ctx.arc(dx, dy, 9, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#C8FF57';
+  ctx.beginPath();
+  ctx.arc(dx, dy, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(dx, dy, 5, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function CourtMinimap({ positions, startS, endS, videoRef }) {
+  const canvasRef = useRef(null);
+
+  // Draw initial frame once positions/rally change
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !positions.length) return;
+    drawMinimap(canvas, positions, startS, startS, endS);
+  }, [positions, startS, endS]);
+
+  // Wire up to video timeupdate
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !positions.length) return;
+    const handler = () =>
+      drawMinimap(canvas, positions, startS + video.currentTime, startS, endS);
+    video.addEventListener('timeupdate', handler);
+    return () => video.removeEventListener('timeupdate', handler);
+  }, [positions, startS, endS, videoRef]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={160}
+      height={176}
+      style={{ display: 'block', margin: '0 auto', borderRadius: 12 }}
+    />
+  );
+}
 
 // SVG donut pie chart
 function PieChart({ slices }) {
@@ -53,12 +177,15 @@ function PieChart({ slices }) {
 }
 
 // Single rally page
-function RallyPage({ rally, label, onLabel, sessionId, onNext, isLast }) {
+function RallyPage({ rally, label, onLabel, note, onNote, sessionId, onNext, isLast, courtPositions }) {
   const isWin    = rally.rally_winner === 'user';
   const accent   = isWin ? '#C8FF57' : '#FF6B6B';
   const prevMy   = isWin ? rally.my_score - 1 : rally.my_score;
   const prevOpp  = isWin ? rally.opponent_score : rally.opponent_score - 1;
   const duration = Math.round(rally.end_s - rally.start_s);
+  const videoRef = useRef(null);
+  const hasPositions = courtPositions.length > 0
+    && rally.start_s != null && rally.end_s != null;
 
   return (
     <div className="px-5 pt-3 pb-6 space-y-4">
@@ -85,13 +212,24 @@ function RallyPage({ rally, label, onLabel, sessionId, onNext, isLast }) {
       {/* Clip video */}
       <div style={{ textAlign: 'center' }}>
         <video
+          ref={videoRef}
           src={`${API_BASE}/rally_clip/${sessionId}/${rally.clip_filename}`}
           controls
           playsInline
           muted
-          style={{ display: 'inline-block', maxHeight: '50dvh', maxWidth: '100%', borderRadius: 16 }}
+          style={{ display: 'inline-block', maxHeight: '45dvh', maxWidth: '100%', borderRadius: 16 }}
         />
       </div>
+
+      {/* Court minimap — synced to video */}
+      {hasPositions && (
+        <CourtMinimap
+          positions={courtPositions}
+          startS={rally.start_s}
+          endS={rally.end_s}
+          videoRef={videoRef}
+        />
+      )}
 
       {/* Tag buttons — losses only */}
       {!isWin && (
@@ -120,6 +258,19 @@ function RallyPage({ rally, label, onLabel, sessionId, onNext, isLast }) {
         </div>
       )}
 
+      {/* Rally note */}
+      <div>
+        <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest mb-2">Note</p>
+        <textarea
+          value={note || ''}
+          onChange={e => onNote(rally.index, e.target.value)}
+          placeholder="Add a note about this rally…"
+          rows={2}
+          className="w-full px-3 py-2.5 rounded-xl text-xs text-white placeholder:text-white/15 outline-none resize-none"
+          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
+        />
+      </div>
+
       {/* Next button */}
       <button
         onClick={onNext}
@@ -134,7 +285,7 @@ function RallyPage({ rally, label, onLabel, sessionId, onNext, isLast }) {
 }
 
 // Final summary page
-function SummaryPage({ summary, losses, labels, onHome }) {
+function SummaryPage({ summary, losses, labels, onHome, feedback, feedbackLoading, feedbackError, opponentName }) {
   const counts = { swing_miss: 0, bad_footwork: 0, other: 0, unlabeled: 0 };
   losses.forEach(r => {
     const l = labels[r.index];
@@ -181,16 +332,29 @@ function SummaryPage({ summary, losses, labels, onHome }) {
         </div>
       )}
 
-      {/* AI Feedback placeholder */}
-      <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4 space-y-2">
-        <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest">
-          AI Coaching
-        </p>
-        <div className="space-y-1.5">
-          <div className="h-2 rounded-full bg-white/[0.05] w-full" />
-          <div className="h-2 rounded-full bg-white/[0.05] w-4/5" />
-          <div className="h-2 rounded-full bg-white/[0.05] w-3/5" />
+      {/* AI Coaching */}
+      <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest">AI Coaching</p>
+          {opponentName ? (
+            <span className="text-[10px] text-white/20">vs {opponentName}</span>
+          ) : null}
         </div>
+        {feedbackLoading ? (
+          <div className="space-y-1.5">
+            <div className="h-2 rounded-full bg-white/[0.05] w-full" style={{ animation: 'pulse 1.5s ease-in-out infinite' }} />
+            <div className="h-2 rounded-full bg-white/[0.05] w-4/5" style={{ animation: 'pulse 1.5s ease-in-out infinite 0.15s' }} />
+            <div className="h-2 rounded-full bg-white/[0.05] w-3/5" style={{ animation: 'pulse 1.5s ease-in-out infinite 0.3s' }} />
+          </div>
+        ) : feedback ? (
+          <p className="text-sm text-white/60 leading-relaxed">{feedback}</p>
+        ) : feedbackError === 'quota' ? (
+          <p className="text-xs text-white/30 leading-relaxed">
+            API quota exceeded — feedback will be available again tomorrow.
+          </p>
+        ) : feedbackError === 'error' ? (
+          <p className="text-xs text-white/20">Feedback unavailable</p>
+        ) : null}
       </div>
 
       <button
@@ -213,8 +377,17 @@ function RallyResult() {
   const movementResult = state?.movementResult ?? null;
   const { session_id, rallies = [], summary = {} } = result;
 
+  const opponentName = state?.opponentName ?? '';
+  const matchComment = state?.matchComment ?? '';
+  const sport        = state?.sport ?? 'badminton';
+
   const [page, setPage] = useState(0);
   const [labels, setLabels] = useState({});
+  const [courtPositions, setCourtPositions] = useState([]);
+  const [rallyNotes, setRallyNotes] = useState({});
+  const [feedback, setFeedback] = useState(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState(null); // 'quota' | 'error' | null
 
   // Fetch persisted labels
   useEffect(() => {
@@ -229,6 +402,56 @@ function RallyResult() {
       .catch(() => {});
   }, [session_id]);
 
+  // Fetch court positions for minimap
+  useEffect(() => {
+    if (!session_id) return;
+    fetch(`${API_BASE}/court_positions/${session_id}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setCourtPositions(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [session_id]);
+
+  function handleNote(rallyIndex, note) {
+    setRallyNotes(prev => ({ ...prev, [rallyIndex]: note }));
+  }
+
+  const enriched   = rallies.map(r => ({ ...r, session_id }));
+  const losses     = enriched.filter(r => r.rally_winner === 'opponent');
+  const totalPages = enriched.length + 1;
+  const isSummary  = page >= enriched.length;
+
+  // Trigger LLM feedback when summary page first appears
+  useEffect(() => {
+    if (!isSummary || !session_id || feedback !== null || feedbackLoading) return;
+    setFeedbackLoading(true);
+    const lossTagsObj = {};
+    losses.forEach(r => { if (labels[r.index]) lossTagsObj[r.index] = labels[r.index]; });
+    fetch(`${API_BASE}/rally_coaching`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id,
+        sport_type: sport,
+        user_wins:     summary.user_wins     ?? 0,
+        opponent_wins: summary.opponent_wins ?? 0,
+        total_rallies: summary.total_rallies ?? 0,
+        opponent_name: opponentName,
+        match_comment: matchComment,
+        loss_tags:     lossTagsObj,
+        rally_notes:   rallyNotes,
+      }),
+    })
+      .then(async r => {
+        if (r.status === 429) { setFeedbackError('quota'); return; }
+        if (!r.ok) { setFeedbackError('error'); return; }
+        const data = await r.json();
+        setFeedback(data?.feedback ?? null);
+        if (!data?.feedback) setFeedbackError('error');
+      })
+      .catch(() => setFeedbackError('error'))
+      .finally(() => setFeedbackLoading(false));
+  }, [isSummary]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleLabel(rallyIndex, label) {
     setLabels(prev => {
       const next = { ...prev };
@@ -241,11 +464,6 @@ function RallyResult() {
       body: JSON.stringify({ session_id, rally_index: rallyIndex, label }),
     }).catch(() => {});
   }
-
-  const enriched   = rallies.map(r => ({ ...r, session_id }));
-  const losses     = enriched.filter(r => r.rally_winner === 'opponent');
-  const totalPages = enriched.length + 1;
-  const isSummary  = page >= enriched.length;
 
   const goBack = () => {
     if (page > 0) setPage(p => p - 1);
@@ -291,19 +509,16 @@ function RallyResult() {
 
       {/* Page content */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {isSummary ? (
+        {isSummary || enriched.length === 0 ? (
           <SummaryPage
             summary={summary}
             losses={losses}
             labels={labels}
             onHome={() => navigate('/home')}
-          />
-        ) : enriched.length === 0 ? (
-          <SummaryPage
-            summary={summary}
-            losses={losses}
-            labels={labels}
-            onHome={() => navigate('/home')}
+            feedback={feedback}
+            feedbackLoading={feedbackLoading}
+            feedbackError={feedbackError}
+            opponentName={opponentName}
           />
         ) : (
           <RallyPage
@@ -311,9 +526,12 @@ function RallyResult() {
             rally={enriched[page]}
             label={labels[enriched[page].index]}
             onLabel={handleLabel}
+            note={rallyNotes[enriched[page].index] ?? ''}
+            onNote={handleNote}
             sessionId={session_id}
             onNext={() => setPage(p => p + 1)}
             isLast={page === enriched.length - 1}
+            courtPositions={courtPositions}
           />
         )}
       </div>
