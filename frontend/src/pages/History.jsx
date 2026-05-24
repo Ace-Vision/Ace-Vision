@@ -36,9 +36,60 @@ function sessionToResult(s) {
   };
 }
 
+function dotColor(s) {
+  if (s >= 75) return '#C8FF57';
+  if (s >= 55) return '#f59e0b';
+  return '#f87171';
+}
+
+function ProgressChart({ data }) {
+  if (!data || data.length < 2) return null;
+
+  const W = 300, H = 90;
+  const pad = { t: 12, b: 12, l: 12, r: 12 };
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+  const n = data.length;
+  const xOf = i => pad.l + (n === 1 ? plotW / 2 : (i * plotW) / (n - 1));
+  const yOf = score => pad.t + plotH - (score / 100) * plotH;
+  const points = data.map((d, i) => `${xOf(i)},${yOf(d.overall_score)}`).join(' ');
+
+  return (
+    <div className="card px-4 pt-3 pb-2 mb-5">
+      <p className="text-[10px] font-semibold text-[#444] uppercase tracking-widest mb-2">Score Trend</p>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 90 }}>
+        {/* midline at 50 */}
+        <line
+          x1={pad.l} y1={yOf(50)} x2={W - pad.r} y2={yOf(50)}
+          stroke="#1e1e1e" strokeWidth="1" strokeDasharray="4 3"
+        />
+        {/* score line */}
+        <polyline
+          points={points}
+          fill="none" stroke="#C8FF57" strokeWidth="1.5"
+          strokeLinecap="round" strokeLinejoin="round" opacity="0.45"
+        />
+        {/* dots */}
+        {data.map((d, i) => (
+          <circle key={i} cx={xOf(i)} cy={yOf(d.overall_score)} r="4" fill={dotColor(d.overall_score)} />
+        ))}
+      </svg>
+      <div className="flex justify-between mt-1">
+        <span className="text-[9px] text-[#333]">
+          {data.length > 0 && new Date(data[0].date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </span>
+        <span className="text-[9px] text-[#333]">
+          {data.length > 1 && new Date(data[data.length - 1].date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function History() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState([]);
+  const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -46,12 +97,15 @@ function History() {
     const token = localStorage.getItem('token');
     if (!user.id) { setLoading(false); return; }
 
-    fetch(`${API_BASE}/users/${user.id}/history`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then(r => r.json())
-      .then(data => {
-        setSessions(Array.isArray(data) ? data : []);
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+    Promise.all([
+      fetch(`${API_BASE}/users/${user.id}/history`, { headers }).then(r => r.json()),
+      fetch(`${API_BASE}/users/${user.id}/progress/chart`, { headers }).then(r => r.json()),
+    ])
+      .then(([history, chart]) => {
+        setSessions(Array.isArray(history) ? history : []);
+        setChartData(Array.isArray(chart) ? chart : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -83,6 +137,13 @@ function History() {
           </div>
         ))}
       </div>
+
+      {/* Progress chart */}
+      {!loading && chartData.length >= 2 && (
+        <div className="px-5">
+          <ProgressChart data={chartData} />
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-10">
