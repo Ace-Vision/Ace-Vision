@@ -61,9 +61,17 @@ def extract_audio(video_path: str, out_path: str) -> None:
     )
 
 
+_model_cache: dict[str, object] = {}
+
 def _load_model(model_size: str):
     import whisper  # noqa: PLC0415  (lazy import to avoid startup cost)
-    return whisper.load_model(model_size)
+    if model_size not in _model_cache:
+        print(f"[whisper] Loading model '{model_size}'…")
+        _model_cache[model_size] = whisper.load_model(model_size)
+        print(f"[whisper] Model '{model_size}' loaded and cached.")
+    else:
+        print(f"[whisper] Using cached model '{model_size}'.")
+    return _model_cache[model_size]
 
 
 def transcribe_segments(
@@ -337,7 +345,7 @@ def recognize_scores(
 
 def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -> list[dict]:
     """
-    Cut and save a video clip for each rally.
+    Cut and save a video clip for each rally (clips run in parallel).
 
     Args:
         video_path:  source video path
@@ -348,32 +356,37 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
         Entries with a confirmed rally_winner, enriched with
         index / start_s / end_s / clip_filename.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     out_dir = os.path.join("data", "results", session_id)
     os.makedirs(out_dir, exist_ok=True)
 
-    clipped: list[dict] = []
+    # Build the list of clips to cut (preserving order)
+    tasks: list[dict] = []
     clip_idx = 0
-
     for i, rally in enumerate(rallies):
         if rally["rally_winner"] is None:
             continue
-
         start_s = rallies[i - 1]["timestamp"] if i > 0 else 0.0
         end_s   = rally["timestamp"]
-        winner  = rally["rally_winner"]
-
-        # Skip clips shorter than 1 second — ffmpeg crashes on zero-length segments
         if end_s - start_s < 1.0:
             continue
+        tasks.append({
+            "rally":    rally,
+            "index":    clip_idx,
+            "start_s":  start_s,
+            "end_s":    end_s,
+            "filename": f"rally_{clip_idx:03d}_{rally['rally_winner']}.mp4",
+        })
+        clip_idx += 1
 
-        filename = f"rally_{clip_idx:03d}_{winner}.mp4"
-        out_path = os.path.join(out_dir, filename)
-
+    def _cut(task: dict) -> dict:
+        out_path = os.path.join(out_dir, task["filename"])
         subprocess.run(
             [
                 "ffmpeg", "-y",
-                "-ss", str(start_s),
-                "-to", str(end_s),
+                "-ss", str(task["start_s"]),
+                "-to", str(task["end_s"]),
                 "-i", video_path,
                 "-c:v", "libx264", "-preset", "fast",
                 "-c:a", "aac",
@@ -383,17 +396,27 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
             check=True,
             capture_output=True,
         )
+        return task
 
-        clipped.append({
-            **rally,
-            "index":         clip_idx,
-            "start_s":       start_s,
-            "end_s":         end_s,
-            "clip_filename": filename,
-        })
-        clip_idx += 1
+    # Run ffmpeg jobs in parallel (capped at 4 to avoid I/O saturation)
+    completed: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_cut, t): t for t in tasks}
+        for future in as_completed(futures):
+            task = future.result()
+            completed[task["index"]] = task
 
-    return clipped
+    return [
+        {
+            **completed[t["index"]]["rally"],
+            "index":         t["index"],
+            "start_s":       t["start_s"],
+            "end_s":         t["end_s"],
+            "clip_filename": t["filename"],
+        }
+        for t in tasks
+        if t["index"] in completed
+    ]
 
 
 def _get_video_duration(video_path: str) -> float:

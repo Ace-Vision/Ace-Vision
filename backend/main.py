@@ -314,7 +314,7 @@ async def analyse_movement(
     try:
         final_score = (final_my_score, final_opp_score) if final_my_score is not None and final_opp_score is not None else None
         score_result = await asyncio.to_thread(
-            score_recognizer.run_score_analysis, tmp_path, "small", "en", session_id, final_score,
+            score_recognizer.run_score_analysis, tmp_path, "tiny", "en", session_id, final_score,
             court_result.get("match_start_s"),
         )
         rallies       = score_result["rallies"]

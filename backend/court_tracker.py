@@ -28,7 +28,7 @@ LEFT_ANKLE  = 27
 RIGHT_ANKLE = 28
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MOVEMENT_STRIDE  = 6
+MOVEMENT_STRIDE  = 12
 COURT_W, COURT_H = 400, 440
 TRAIL_LEN        = 40
 
@@ -726,11 +726,6 @@ def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
     print("[movement] Rendering bird's-eye video…")
     out_path = generate_movement_video(
         positions, H, video_w, video_h, fps, session_id, shot_frames=shot_frames
-    )
-
-    print("[movement] Rendering debug overlay…")
-    generate_debug_overlay(
-        video_path, positions, keypoints_list, fps, session_id, shot_frames=shot_frames
     )
     print(f"[movement] Done → {out_path}")
 
