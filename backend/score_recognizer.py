@@ -2,10 +2,10 @@
 backend/score_recognizer.py — Extract and parse spoken scores from match video.
 
 Pipeline:
-  1. ffmpeg で動画から mono 16kHz WAV を抽出
-  2. Whisper でタイムスタンプ付きトランスクリプト取得
-  3. 正規表現でスコアパターン (例: "3-2", "3対2") を抽出
-  4. avg_logprob でフィルタリング
+  1. Extract mono 16kHz WAV from video via ffmpeg
+  2. Transcribe with Whisper, including word-level timestamps
+  3. Match score patterns (e.g. "3-2", "three two") with regex
+  4. Filter by avg_logprob confidence threshold
 
 Usage:
     from backend.score_recognizer import recognize_scores
@@ -20,17 +20,15 @@ import tempfile
 import uuid
 from typing import Optional
 
-# Whisper avg_logprob の閾値
-# 試合録画は環境音で -3〜-4 まで下がることがある
-# スコアパターンの正規表現がフィルタ役を担うため閾値は緩めに設定
+# Confidence threshold for Whisper segments.
+# Match recordings can drop to -3~-4 due to ambient noise;
+# the score regex acts as an additional filter so we keep this loose.
 CONFIDENCE_THRESHOLD = -5.0
 
-# スコアパターン:
-#   セパレータあり: "3-2", "3対2", "3、2" など
-#   スペース区切り: "0 0", "15 14", "1 0"
+# Score pattern — separators: "3-2", "3:2", "3 2", and Japanese variants
 _SCORE_RE = re.compile(r'\b(\d{1,2})(?:\s*[-ー対:：、,]\s*|\s+)(\d{1,2})\b')
 
-# 英語の数字語 → アラビア数字 (スコア範囲 0-30)
+# English number words → Arabic digits (score range 0-30)
 _WORD_NUMBERS: dict[str, str] = {
     "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
     "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
@@ -44,14 +42,14 @@ _WORD_NUM_RE = re.compile(
 )
 
 def _normalise_numbers(text: str) -> str:
-    """英語の数字語をアラビア数字に変換: 'one zero' → '1 0', 'two and three' → '2 3'"""
+    """Convert English number words to digits: 'one zero' → '1 0', 'two and three' → '2 3'."""
     result = _WORD_NUM_RE.sub(lambda m: _WORD_NUMBERS[m.group(1).lower()], text)
     result = re.sub(r'\s+and\s+', ' ', result, flags=re.IGNORECASE)
     return result
 
 
 def extract_audio(video_path: str, out_path: str) -> None:
-    """動画から mono 16kHz WAV を抽出する。ffmpeg が必要。"""
+    """Extract mono 16kHz WAV from a video file. Requires ffmpeg."""
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", video_path,
@@ -74,7 +72,7 @@ def transcribe_segments(
     language: str = "en",
 ) -> list[dict]:
     """
-    Whisper でセグメント単位のトランスクリプトを返す。
+    Transcribe audio with Whisper and return segment-level results.
 
     Returns:
         [{"start": float, "end": float, "text": str, "avg_logprob": float}, ...]
@@ -85,11 +83,11 @@ def transcribe_segments(
         language=language,
         word_timestamps=True,
         verbose=False,
-        temperature=(0, 0.2, 0.4),        # 0で失敗したら高温で再試行 → ループ脱出
+        temperature=(0, 0.2, 0.4),        # retry with higher temperature if greedy fails → breaks loops
         condition_on_previous_text=False,
         no_speech_threshold=0.3,
         logprob_threshold=-8.0,
-        compression_ratio_threshold=2.0,  # 繰り返しセグメントを検出して再試行トリガー
+        compression_ratio_threshold=2.0,  # detect repetitive segments and trigger retry
         initial_prompt=(
             "Badminton match score announcements. After each rally, the current score is called out as two numbers — "
             "server's score first, then receiver's. Each point goes to one side, so only one number changes at a time. "
@@ -111,15 +109,14 @@ def transcribe_segments(
 
 def _best_timestamp(seg: dict, match_start: int, match_end: int) -> float:
     """
-    マッチした文字位置に最も近い単語の開始時刻を返す。
-    word_timestamps がなければセグメント開始時刻にフォールバック。
+    Return the start time of the word closest to the matched character position.
+    Falls back to segment start if word timestamps are unavailable.
     """
     text = seg["text"]
     words = seg.get("words", [])
     if not words:
         return seg["start"]
 
-    # マッチ文字列がどの単語を含むか探す
     char_pos = 0
     for w in words:
         word_text = w.get("word", "")
@@ -133,18 +130,18 @@ def _best_timestamp(seg: dict, match_start: int, match_end: int) -> float:
 
 _DIGIT_RE = re.compile(r'\d+')
 
-# "11" や "21" など、孤立した2桁数字を 1-1 / 2-1 のスコアペアとして解釈するフォールバック。
-# Whisper が "one one" → "11" と書き起こすケースに対応。
-# セグメントに他のテキストがない（スコアアナウンス専用セグメント）前提で使う。
+# Fallback for isolated 2-digit strings like "11" or "21" → interpret as score pairs 1-1 / 2-1.
+# Handles cases where Whisper transcribes "one one" as "11".
+# Only applied when the segment contains nothing but the two digits.
 _ISOLATED_2DIGIT_RE = re.compile(r'^\W*(\d)(\d)\W*$')
 
 def _try_match_text(text: str, timestamp: float, out: list[dict]) -> None:
-    """テキストを正規化してスコアパターンを探し、out に追記する。"""
+    """Normalise text and extract score patterns, appending matches to out."""
     normalised = _normalise_numbers(text)
     digits = _DIGIT_RE.findall(normalised)
 
     if len(digits) > 2:
-        # 数字が多い → ハルシネーションの可能性。最初のマッチのみ採用。
+        # Many digits → likely a hallucination; take only the first match.
         m = _SCORE_RE.search(normalised)
         if m:
             out.append({
@@ -175,10 +172,10 @@ def _try_match_text(text: str, timestamp: float, out: list[dict]) -> None:
 
 def parse_scores(segments: list[dict]) -> list[dict]:
     """
-    セグメントリストからスコアを抽出する。
+    Extract score entries from a list of Whisper segments.
 
-    単一セグメントでのマッチに加え、隣接セグメントを結合して
-    "one" + "zero" のように分断されたケースも捕捉する。
+    In addition to single-segment matches, adjacent segments are combined
+    to catch split announcements like "three" + "three" → "3 3" → (3, 3).
 
     Returns:
         [{"timestamp": float, "my_score": int, "opponent_score": int}, ...]
@@ -190,14 +187,14 @@ def parse_scores(segments: list[dict]) -> list[dict]:
     for i, seg in enumerate(valid):
         _try_match_text(seg["text"], seg["start"], raw)
 
-        # 隣接セグメントを結合: "three" + "three" → "3 3" → (3,3) を捕捉
+        # Combine adjacent segments: catches scores split across two segments
         if i + 1 < len(valid):
             nxt = valid[i + 1]
             if nxt["start"] - seg["end"] < 2.0:
                 combined = seg["text"].rstrip(".,!") + " " + nxt["text"].lstrip()
                 _try_match_text(combined, seg["start"], raw)
 
-    # (timestamp, my_score, opponent_score) の重複を除去
+    # Deduplicate exact (timestamp, score) pairs
     seen: set[tuple] = set()
     deduped: list[dict] = []
     for s in raw:
@@ -208,8 +205,8 @@ def parse_scores(segments: list[dict]) -> list[dict]:
 
     deduped.sort(key=lambda s: s["timestamp"])
 
-    # バーストフィルタ: 3秒以内に複数検出された場合は最初のみ採用
-    # ハルシネーションループ ("3,3,3,3,3..." → 101.5s, 101.6s, ...) を除去
+    # Burst filter: keep only the first detection within any 3-second window.
+    # Removes hallucination loops like "3,3,3,3,..." at 101.5s, 101.6s, ...
     MIN_SCORE_GAP = 3.0
     burst_filtered: list[dict] = []
     for s in deduped:
@@ -221,21 +218,27 @@ def parse_scores(segments: list[dict]) -> list[dict]:
 
 def compute_rally_results(scores: list[dict]) -> dict:
     """
-    スコア履歴からラリーの勝敗を判定する。
+    Determine rally winners from a sequence of detected scores.
 
-    ルール:
-      - my_score が増加   → "user"     (ユーザーがラリー獲得)
-      - opponent_score 増加 → "opponent" (相手がラリー獲得)
-      - 変化なし or 両方増加 → 重複 or 認識ミスとして除外
+    Rules:
+      - only my_score increases    → "user"     wins the rally
+      - only opponent_score increases → "opponent" wins the rally
+      - both increase (missed rallies bundled) → "both"
+      - score decreases or unchanged → recognition error, entry discarded
+
+    Invalid entries do NOT update last_valid, so subsequent valid scores
+    are still compared against the last correct state.
 
     Returns:
         {
             "rallies": [
                 {
-                    "timestamp":      float,   # スコアが読み上げられた時刻
+                    "timestamp":      float,   # time score was announced
                     "my_score":       int,
                     "opponent_score": int,
-                    "rally_winner":   "user" | "opponent" | None,
+                    "rally_winner":   "user" | "opponent" | "both" | None,
+                    "prev_my":        int | None,
+                    "prev_opp":       int | None,
                 },
                 ...
             ],
@@ -246,17 +249,16 @@ def compute_rally_results(scores: list[dict]) -> dict:
             },
         }
     """
-    # タイムスタンプ順にソートし、連続する重複スコアを除去
+    # Sort by timestamp and remove consecutive duplicate scores
     sorted_scores = sorted(scores, key=lambda s: s["timestamp"])
     deduped: list[dict] = []
     for s in sorted_scores:
         if deduped and deduped[-1]["my_score"] == s["my_score"] and deduped[-1]["opponent_score"] == s["opponent_score"]:
-            continue  # 同スコアが連続して検出された (読み上げの二重検知)
+            continue  # duplicate score detected (double announcement)
         deduped.append(s)
 
-    # 最初のスコアが 0-0 でない場合、試合開始点として暗黙の 0-0 を挿入
-    # (Whisper が開始アナウンスを聞き逃すケースに対応)
-    # 最初の検出スコアより少し前 (最低 1 秒) に配置してゼロ秒クリップを防ぐ
+    # If the first detected score is not 0-0, insert an implicit 0-0 as match start.
+    # Placed 1 second before the first detection to avoid zero-length clips.
     if deduped and not (deduped[0]["my_score"] == 0 and deduped[0]["opponent_score"] == 0):
         first_ts = deduped[0]["timestamp"]
         implicit_ts = max(0.0, first_ts - 1.0)
@@ -266,7 +268,7 @@ def compute_rally_results(scores: list[dict]) -> dict:
     user_wins = 0
     opponent_wins = 0
 
-    # last_valid: 有効と判定された直近のスコア (無効エントリでは更新しない)
+    # last_valid: most recent accepted score; not updated on invalid entries
     last_valid = deduped[0]
     rallies.append({**last_valid, "rally_winner": None, "prev_my": None, "prev_opp": None})
 
@@ -281,12 +283,10 @@ def compute_rally_results(scores: list[dict]) -> dict:
             winner = "opponent"
             opponent_wins += 1
         elif my_diff >= 1 and opp_diff >= 1:
-            # 両方増加: 複数ラリーが一塊になった (取りこぼし)
-            # クリップは保存するが勝者は特定できない
+            # Both sides increased — multiple missed rallies bundled into one clip
             winner = "both"
         else:
-            # どちらかが減少 / 変化なし → 認識エラーとして完全除外
-            # last_valid は更新しない (次のエントリを直近の有効スコアと比較するため)
+            # Score decreased or unchanged → recognition error; discard and keep last_valid
             continue
 
         rallies.append({
@@ -314,12 +314,12 @@ def recognize_scores(
     language: str = "en",
 ) -> list[dict]:
     """
-    メインエントリ: 動画ファイルからスコア一覧を返す。
+    Convenience entry point: return raw score list from a video file.
 
     Args:
-        video_path:  入力動画のパス
-        model_size:  Whisper モデルサイズ ("medium" | "large" | etc.)
-        language:    音声言語コード (デフォルト "en")
+        video_path:  path to the input video
+        model_size:  Whisper model size ("medium" | "large" | etc.)
+        language:    audio language code (default "en")
 
     Returns:
         [{"timestamp": float, "my_score": int, "opponent_score": int}, ...]
@@ -339,15 +339,16 @@ def recognize_scores(
 
 def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -> list[dict]:
     """
-    各ラリーに対応する動画クリップを切り出して保存する。
+    Cut and save a video clip for each rally.
 
     Args:
-        video_path:  元動画のパス
-        rallies:     compute_rally_results() の "rallies" リスト
-        session_id:  保存先ディレクトリを決める ID
+        video_path:  source video path
+        rallies:     "rallies" list from compute_rally_results()
+        session_id:  output directory identifier
 
     Returns:
-        rally_winner が確定しているラリーのみ、index / start_s / end_s / clip_filename を付加して返す
+        Entries with a confirmed rally_winner, enriched with
+        index / start_s / end_s / clip_filename.
     """
     out_dir = os.path.join("data", "results", session_id)
     os.makedirs(out_dir, exist_ok=True)
@@ -363,7 +364,7 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
         end_s   = rally["timestamp"]
         winner  = rally["rally_winner"]
 
-        # 0秒以下のクリップは ffmpeg がクラッシュするのでスキップ
+        # Skip clips shorter than 1 second — ffmpeg crashes on zero-length segments
         if end_s - start_s < 1.0:
             continue
 
@@ -398,7 +399,7 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
 
 
 def _get_video_duration(video_path: str) -> float:
-    """ffprobe で動画の長さ（秒）を取得する。"""
+    """Return video duration in seconds via ffprobe."""
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "csv=p=0", video_path],
@@ -418,14 +419,19 @@ def run_score_analysis(
     final_score: Optional[tuple[int, int]] = None,
 ) -> dict:
     """
-    フルパイプライン: 音声認識 → ラリー判定 → クリップ切り出し。
+    Full pipeline: speech recognition → rally determination → clip extraction.
 
-    session_id を指定すると既存ディレクトリ (court_tracker と同じ) にクリップを保存できる。
+    Saves clips into an existing session directory when session_id is provided
+    (shared with court_tracker output).
+
+    If final_score is given, it takes priority over Whisper detections:
+      1. Detections that exceed final_score are discarded as hallucinations.
+      2. final_score is injected as a ground-truth terminal entry.
 
     Returns:
         {
             "session_id": str,
-            "rallies":    [...],  # clip_filename 付き
+            "rallies":    [...],  # each entry includes clip_filename
             "summary":    {"user_wins", "opponent_wins", "total_rallies"},
         }
     """
@@ -440,13 +446,12 @@ def run_score_analysis(
         segments = transcribe_segments(audio_path, model_size=model_size, language=language)
         scores   = parse_scores(segments)
 
-        # ユーザー入力の最終スコアが優先
-        # 1) Whisperがfinal_scoreを超えて検出した分はハルシネーションとして除去
-        # 2) 最終スコアをリストに注入 → compute_rally_results が自然に処理
         if final_score is not None:
             final_my, final_opp = final_score
+            # Drop any Whisper detections that exceeded the user-provided final score
             scores = [s for s in scores
                       if s["my_score"] <= final_my and s["opponent_score"] <= final_opp]
+            # Inject the final score as a guaranteed terminal entry
             last_ts  = scores[-1]["timestamp"] if scores else 0.0
             duration = _get_video_duration(video_path)
             scores.append({
@@ -475,7 +480,7 @@ def recognize_scores_with_transcript(
     language: str = "en",
 ) -> dict:
     """
-    スコア一覧 + 生トランスクリプトをまとめて返すデバッグ用関数。
+    Debug helper: return score list together with raw Whisper transcript.
 
     Returns:
         {

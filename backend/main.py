@@ -310,7 +310,7 @@ async def analyse_movement(
 
     session_id = court_result["session_id"]
 
-    # 2) Score recognition — 失敗しても足跡分析は返す
+    # 2) Score recognition — movement result is returned even if this fails
     try:
         final_score = (final_my_score, final_opp_score) if final_my_score is not None and final_opp_score is not None else None
         score_result = await asyncio.to_thread(
@@ -326,7 +326,7 @@ async def analyse_movement(
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-    # 3) Heatmap — 失敗しても他の結果は返す
+    # 3) Heatmap — other results are returned even if this fails
     try:
         await asyncio.to_thread(
             court_tracker.generate_heatmap,
@@ -432,7 +432,7 @@ async def analyse_score(
     language: str = Form("en"),
 ):
     """
-    動画からスコアを認識し、ラリーごとにクリップを切り出して返す。
+    Recognise scores from a video and return per-rally clips.
 
     Returns:
         { session_id, rallies: [{index, start_s, end_s, my_score, opponent_score,
@@ -511,13 +511,13 @@ async def recognise_scores(
     include_transcript: bool = Form(False),
 ):
     """
-    動画ファイルから読み上げられたスコアを認識し、ラリー勝敗を返す。
+    Recognise spoken scores from a video and return rally winners.
 
     Returns:
         {
             "rallies": [{"timestamp", "my_score", "opponent_score", "rally_winner"}, ...],
             "summary": {"user_wins", "opponent_wins", "total_rallies"},
-            "segments": [...],   # include_transcript=True のときのみ
+            "segments": [...],   # only when include_transcript=True
         }
     """
     suffix = os.path.splitext(file.filename)[1] or ".mp4"

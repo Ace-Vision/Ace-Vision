@@ -6,7 +6,7 @@ import os
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ace_vision.db")
 
-# Render의 PostgreSQL URL은 postgres://로 시작하는데 SQLAlchemy는 postgresql://이 필요함
+# Render's PostgreSQL URL starts with postgres:// but SQLAlchemy requires postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 

@@ -493,20 +493,19 @@ def generate_phase_analysis(
     session_id: str,
 ) -> dict | None:
     """
-    試合を3つの等時間フェーズに分割し、各フェーズのヒートマップと
-    カバレッジ指標を計算する。カバレッジが終盤に著しく低下した場合、
-    体力不足の可能性として flagging する。
+    Split the match into three equal time phases, compute a heatmap and
+    coverage metric for each, and flag potential stamina decline.
 
-    カバレッジ指標 = std_x × std_y (コート座標空間の分布面積の代理指標)
+    Coverage metric = std_x × std_y (proxy for spread area in court coordinates).
 
     Returns:
         {
             "phases": [{"phase": int, "start_s": float, "end_s": float,
                         "coverage_pct": float}, ...],
             "stamina_flag": bool,
-            "coverage_trend": [float, float, float],   # 正規化済み %
+            "coverage_trend": [float, float, float],   # normalised %
         }
-        または None (データ不足)
+        or None if there is insufficient data.
     """
     valid = [(p["time_s"], p) for p in positions if p is not None]
     if len(valid) < 15:
@@ -558,14 +557,14 @@ def generate_phase_analysis(
             "end_s":   round(e, 1),
         })
 
-    # 最大値で正規化した %
+    # Normalise to percentage of maximum coverage
     max_cov = max(raw_coverages) if max(raw_coverages) > 0 else 1.0
     coverage_trend = [round(c / max_cov * 100, 1) for c in raw_coverages]
 
     for i, p in enumerate(phases_out):
         p["coverage_pct"] = coverage_trend[i]
 
-    # 体力フラグ: フェーズ3のカバレッジがフェーズ1の65%未満
+    # Stamina flag: phase 3 coverage dropped below 65% of phase 1
     stamina_flag = (raw_coverages[0] > 0 and
                     raw_coverages[2] / raw_coverages[0] < 0.65)
 
@@ -594,10 +593,10 @@ def generate_heatmap(
     session_id: str,
 ) -> dict:
     """
-    得点/失点ラリーの位置ヒートマップを生成して PNG として保存する。
+    Generate position heatmaps for won and lost rallies and save as PNG.
 
-    各ラリーを正規化（ラリー長さの偏りを除去）してから集計するため、
-    短いラリーも長いラリーも等しくヒートマップに反映される。
+    Each rally's contribution is normalised by its length so that short and
+    long rallies carry equal weight in the heatmap.
 
     Returns: {"win": path, "loss": path}
     """
@@ -607,7 +606,7 @@ def generate_heatmap(
     out_dir = os.path.join("data", "results", session_id)
     os.makedirs(out_dir, exist_ok=True)
 
-    # positions → コート座標 (time_s, cx, cy)
+    # Map positions to court coordinates (time_s, cx, cy)
     timed: list[tuple[float, float, float]] = []
     for p in positions:
         if p is None:
@@ -627,7 +626,7 @@ def generate_heatmap(
             pts = [(cx, cy) for t, cx, cy in timed if start_s <= t <= end_s]
             if not pts:
                 continue
-            w = 1.0 / len(pts)   # 各ラリーの貢献を均等化
+            w = 1.0 / len(pts)   # equal weight per rally regardless of length
             for cx, cy in pts:
                 grid[int(cy), int(cx)] += w
         return grid
@@ -636,7 +635,7 @@ def generate_heatmap(
     loss_rallies = [r for r in rallies if r.get("rally_winner") == "opponent"]
 
     sigma = 20
-    ksize = int(sigma * 6) | 1   # 奇数
+    ksize = int(sigma * 6) | 1   # must be odd
 
     saved: dict[str, str] = {}
     for label, rally_list, cmap_name in [
@@ -761,7 +760,7 @@ def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
         "total_positions":     sum(1 for p in positions if p is not None),
         "duration_s":          round(len(positions) * MOVEMENT_STRIDE / fps, 1),
         "phase_analysis":      phase_analysis,
-        # ヒートマップ生成用の内部データ（main.py が使用）
+        # Internal data passed to generate_heatmap() in main.py
         "_positions": positions,
         "_H":         H,
         "_fps":       fps,
