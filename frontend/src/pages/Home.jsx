@@ -115,6 +115,8 @@ function Home() {
   const [courtCorners, setCourtCorners] = useState(null);
   const [opponentName, setOpponentName] = useState('');
   const [matchComment, setMatchComment] = useState('');
+  const [finalMyScore,  setFinalMyScore]  = useState('');
+  const [finalOppScore, setFinalOppScore] = useState('');
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -161,6 +163,10 @@ function Home() {
         dest     = '/movement-result';
         formData.append('sport_type', sport);
         if (corners) formData.append('court_corners', JSON.stringify(corners));
+        if (finalMyScore !== '' && finalOppScore !== '') {
+          formData.append('final_my_score',  finalMyScore);
+          formData.append('final_opp_score', finalOppScore);
+        }
       } else {
         endpoint = '/analyse';
         dest     = '/result';
@@ -174,6 +180,27 @@ function Home() {
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
       const result = await res.json();
+
+      if (mode === 'match') {
+        const token = localStorage.getItem('token');
+        if (token) {
+          fetch(`${API_BASE}/match_sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              session_id:    result.session_id,
+              sport_type:    sport,
+              opponent_name: opponentName || null,
+              match_comment: matchComment || null,
+              rallies:       result.rallies || [],
+              rally_summary: result.rally_summary || {},
+              phase_analysis: result.phase_analysis || null,
+            }),
+          }).then(r => { if (!r.ok) console.warn('[AceVision] match save failed', r.status); })
+            .catch(e => console.warn('[AceVision] match save error', e));
+        }
+      }
+
       navigate(dest, { state: { result, sport, mode, file, opponentName, matchComment } });
     } catch (err) {
       setError(err.message);
@@ -270,6 +297,30 @@ function Home() {
               className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none resize-none"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
             />
+            <div>
+              <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest mb-2 px-1">
+                Final score (optional — improves rally detection)
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number" min="0" max="30"
+                  placeholder="You"
+                  value={finalMyScore}
+                  onChange={e => setFinalMyScore(e.target.value)}
+                  className="flex-1 px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none text-center tabular-nums"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                />
+                <span className="text-white/20 text-lg font-light">—</span>
+                <input
+                  type="number" min="0" max="30"
+                  placeholder="Them"
+                  value={finalOppScore}
+                  onChange={e => setFinalOppScore(e.target.value)}
+                  className="flex-1 px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none text-center tabular-nums"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -325,6 +376,7 @@ function Home() {
 
   // ── Mode selector ───────────────────────────────────────────
   if (step === 'mode') {
+    const isGuest = localStorage.getItem('guest') === 'true';
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center px-8">
         <div className="px-5 pt-14 pb-6 flex items-center gap-3 absolute top-0 left-0 animate-fade-up-slow">
@@ -383,6 +435,22 @@ function Home() {
                 Up to 5 min match footage.<br />Detects shots and finds trends.
               </div>
             </button>
+
+            {/* Match history — only for logged-in users */}
+            {!isGuest && (
+              <button
+                onClick={() => navigate('/match-history')}
+                className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+                style={{ animationDelay: '0.75s' }}
+              >
+                <div className="text-white font-semibold mb-1" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                  History
+                </div>
+                <div className="text-white/30 text-xs leading-relaxed">
+                  Review past match analyses.
+                </div>
+              </button>
+            )}
 
           </div>
         </div>

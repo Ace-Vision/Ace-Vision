@@ -177,11 +177,24 @@ function PieChart({ slices }) {
 }
 
 // Single rally page
-function RallyPage({ rally, label, onLabel, note, onNote, sessionId, onNext, isLast, courtPositions }) {
-  const isWin    = rally.rally_winner === 'user';
-  const accent   = isWin ? '#C8FF57' : '#FF6B6B';
-  const prevMy   = isWin ? rally.my_score - 1 : rally.my_score;
-  const prevOpp  = isWin ? rally.opponent_score : rally.opponent_score - 1;
+function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, isLast, courtPositions }) {
+  const isBoth = rally.rally_winner === 'both';
+  const isWin  = rally.rally_winner === 'user';
+
+  // prev_my / prev_opp はバックエンドが付与。なければ旧来の ±1 推定にフォールバック
+  const prevMy  = rally.prev_my  ?? (isWin ? rally.my_score - 1 : rally.my_score);
+  const prevOpp = rally.prev_opp ?? (isWin ? rally.opponent_score : rally.opponent_score - 1);
+
+  // このクリップに含まれる失点数（タグスロット数）
+  const oppDiff = Math.max(0, rally.opponent_score - prevOpp);
+
+  // どちらかが2点以上動いていたら「複数ラリー」
+  const isMulti = (rally.my_score - prevMy) + (rally.opponent_score - prevOpp) > 1;
+
+  const accent = isBoth
+    ? '#F0C040'
+    : isWin ? '#C8FF57' : '#FF6B6B';
+
   const duration = Math.round(rally.end_s - rally.start_s);
   const videoRef = useRef(null);
   const hasPositions = courtPositions.length > 0
@@ -190,13 +203,29 @@ function RallyPage({ rally, label, onLabel, note, onNote, sessionId, onNext, isL
   return (
     <div className="px-5 pt-3 pb-6 space-y-4">
 
-      {/* Win / Loss label */}
+      {/* Win / Loss / Both label */}
       <div className="flex items-center justify-between">
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: accent, textTransform: 'uppercase' }}>
-          {isWin ? 'Point Won' : 'Point Lost'}
+          {isBoth ? 'Multiple Rallies' : isWin ? 'Point Won' : 'Point Lost'}
         </span>
         <span className="text-[11px] text-white/20">{duration}s</span>
       </div>
+
+      {/* Multi-rally notice */}
+      {isMulti && (
+        <div className="rounded-xl px-3 py-2.5"
+          style={{
+            background: isBoth ? 'rgba(240,192,64,0.07)' : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${isBoth ? 'rgba(240,192,64,0.20)' : 'rgba(255,255,255,0.08)'}`,
+          }}>
+          <p className="text-xs leading-relaxed"
+            style={{ color: isBoth ? 'rgba(240,192,64,0.65)' : 'rgba(255,255,255,0.30)' }}>
+            {isBoth
+              ? 'Multiple rallies are contained in this clip — individual winners could not be determined.'
+              : `This clip covers ${(rally.my_score - prevMy) + (rally.opponent_score - prevOpp)} consecutive rallies that were grouped together.`}
+          </p>
+        </div>
+      )}
 
       {/* Score transition */}
       <div className="flex items-center gap-4">
@@ -231,30 +260,40 @@ function RallyPage({ rally, label, onLabel, note, onNote, sessionId, onNext, isL
         />
       )}
 
-      {/* Tag buttons — losses only */}
-      {!isWin && (
-        <div>
-          <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest mb-2">
-            Tag this loss
+      {/* Tag buttons — one slot per opponent point in this clip */}
+      {oppDiff > 0 && (
+        <div className="space-y-3">
+          <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">
+            {oppDiff > 1 ? `Tag losses (${oppDiff})` : 'Tag this loss'}
           </p>
-          <div className="flex gap-2 flex-wrap">
-            {LABEL_OPTIONS.map(opt => {
-              const sel = label === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() => onLabel(rally.index, sel ? null : opt.value)}
-                  className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95"
-                  style={sel
-                    ? { background: '#FF6B6B', color: '#000' }
-                    : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }
-                  }
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
+          {Array.from({ length: oppDiff }).map((_, lossIdx) => {
+            const key = `${rally.index}_${lossIdx}`;
+            const sel = labels[key];
+            return (
+              <div key={lossIdx}>
+                {oppDiff > 1 && (
+                  <p className="text-[9px] text-white/15 uppercase tracking-widest mb-1.5">
+                    Loss {lossIdx + 1}
+                  </p>
+                )}
+                <div className="flex gap-2 flex-wrap">
+                  {LABEL_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => onLabel(key, sel === opt.value ? null : opt.value)}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95"
+                      style={sel === opt.value
+                        ? { background: '#FF6B6B', color: '#000' }
+                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -285,21 +324,18 @@ function RallyPage({ rally, label, onLabel, note, onNote, sessionId, onNext, isL
 }
 
 // Final summary page
-function SummaryPage({ summary, losses, labels, onHome, feedback, feedbackLoading, feedbackError, opponentName }) {
-  const counts = { swing_miss: 0, bad_footwork: 0, other: 0, unlabeled: 0 };
-  losses.forEach(r => {
-    const l = labels[r.index];
-    if (l === 'swing_miss')        counts.swing_miss++;
-    else if (l === 'bad_footwork') counts.bad_footwork++;
-    else if (l === 'other')        counts.other++;
-    else                           counts.unlabeled++;
+function SummaryPage({ summary, totalLossSlots, labels, onHome, feedback, feedbackLoading, feedbackError, opponentName }) {
+  const counts = { swing_miss: 0, bad_footwork: 0, other: 0 };
+  Object.values(labels).forEach(l => {
+    if (l in counts) counts[l]++;
   });
+  const unlabeled = Math.max(0, totalLossSlots - Object.keys(labels).length);
 
   const pieSlices = [
     { label: 'Swing Miss',   count: counts.swing_miss,   color: '#FF6B6B' },
     { label: 'Bad Footwork', count: counts.bad_footwork, color: '#FF9F43' },
     { label: 'Other',        count: counts.other,        color: '#636e72' },
-    { label: 'Unlabeled',    count: counts.unlabeled,    color: 'rgba(255,255,255,0.10)' },
+    { label: 'Unlabeled',    count: unlabeled,            color: 'rgba(255,255,255,0.10)' },
   ];
 
   return (
@@ -323,7 +359,7 @@ function SummaryPage({ summary, losses, labels, onHome, feedback, feedbackLoadin
       </div>
 
       {/* Pie chart — only if there were losses */}
-      {losses.length > 0 && (
+      {totalLossSlots > 0 && (
         <div>
           <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
             Loss Breakdown
@@ -389,16 +425,12 @@ function RallyResult() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackError, setFeedbackError] = useState(null); // 'quota' | 'error' | null
 
-  // Fetch persisted labels
+  // Fetch persisted labels — keys are strings like "5_0", "5_1"
   useEffect(() => {
     if (!session_id) return;
     fetch(`${API_BASE}/rally_labels/${session_id}`)
       .then(r => r.json())
-      .then(data => {
-        const parsed = {};
-        for (const [k, v] of Object.entries(data.labels || {})) parsed[parseInt(k)] = v;
-        setLabels(parsed);
-      })
+      .then(data => setLabels(data.labels || {}))
       .catch(() => {});
   }, [session_id]);
 
@@ -415,8 +447,14 @@ function RallyResult() {
     setRallyNotes(prev => ({ ...prev, [rallyIndex]: note }));
   }
 
-  const enriched   = rallies.map(r => ({ ...r, session_id }));
-  const losses     = enriched.filter(r => r.rally_winner === 'opponent');
+  const enriched = rallies.map(r => ({ ...r, session_id }));
+
+  // 失点スロット数: 各クリップの相手得点数を合計
+  const totalLossSlots = enriched.reduce((sum, r) => {
+    const pOpp = r.prev_opp != null ? r.prev_opp : (r.rally_winner === 'user' ? r.opponent_score : r.opponent_score - 1);
+    return sum + Math.max(0, r.opponent_score - pOpp);
+  }, 0);
+
   const totalPages = enriched.length + 1;
   const isSummary  = page >= enriched.length;
 
@@ -424,8 +462,7 @@ function RallyResult() {
   useEffect(() => {
     if (!isSummary || !session_id || feedback !== null || feedbackLoading) return;
     setFeedbackLoading(true);
-    const lossTagsObj = {};
-    losses.forEach(r => { if (labels[r.index]) lossTagsObj[r.index] = labels[r.index]; });
+    const lossTagsObj = { ...labels };
     fetch(`${API_BASE}/rally_coaching`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -452,16 +489,16 @@ function RallyResult() {
       .finally(() => setFeedbackLoading(false));
   }, [isSummary]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function handleLabel(rallyIndex, label) {
+  async function handleLabel(key, label) {
     setLabels(prev => {
       const next = { ...prev };
-      if (label == null) delete next[rallyIndex]; else next[rallyIndex] = label;
+      if (label == null) delete next[key]; else next[key] = label;
       return next;
     });
     await fetch(`${API_BASE}/rally_label`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id, rally_index: rallyIndex, label }),
+      body: JSON.stringify({ session_id, rally_index: key, label }),
     }).catch(() => {});
   }
 
@@ -512,7 +549,7 @@ function RallyResult() {
         {isSummary || enriched.length === 0 ? (
           <SummaryPage
             summary={summary}
-            losses={losses}
+            totalLossSlots={totalLossSlots}
             labels={labels}
             onHome={() => navigate('/home')}
             feedback={feedback}
@@ -524,7 +561,7 @@ function RallyResult() {
           <RallyPage
             key={page}
             rally={enriched[page]}
-            label={labels[enriched[page].index]}
+            labels={labels}
             onLabel={handleLabel}
             note={rallyNotes[enriched[page].index] ?? ''}
             onNote={handleNote}

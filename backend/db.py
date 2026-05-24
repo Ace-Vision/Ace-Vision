@@ -29,6 +29,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     sessions = relationship("AnalysisSession", back_populates="user")
+    match_sessions = relationship("MatchSession", back_populates="user")
 
 class AnalysisSession(Base):
     __tablename__ = "sessions"
@@ -56,6 +57,23 @@ class DeviationResult(Base):
     severity_score = Column(Float)
 
     session = relationship("AnalysisSession", back_populates="deviations")
+
+class MatchSession(Base):
+    __tablename__ = "match_sessions"
+
+    id = Column(String, primary_key=True, index=True)  # session_id
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    sport_type = Column(String)
+    opponent_name = Column(String, nullable=True)
+    match_comment = Column(String, nullable=True)
+    my_score = Column(Integer, nullable=True)
+    opp_score = Column(Integer, nullable=True)
+    rallies = Column(JSON, nullable=True)
+    rally_summary = Column(JSON, nullable=True)
+    phase_analysis = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="match_sessions")
 
 def init_db():
     Base.metadata.create_all(bind=engine)

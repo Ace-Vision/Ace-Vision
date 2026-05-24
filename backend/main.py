@@ -81,7 +81,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), sqlite_db: Session = D
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = int(sub)
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
@@ -101,7 +104,7 @@ def register(body: UserRegister, sqlite_db: Session = Depends(db.get_db)):
         hashed_password=hash_password(body.password), skill_level=body.skill_level,
     )
     sqlite_db.add(user); sqlite_db.commit(); sqlite_db.refresh(user)
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -109,7 +112,7 @@ def login(body: UserLogin, sqlite_db: Session = Depends(db.get_db)):
     user = sqlite_db.query(db.User).filter(db.User.email == body.email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
 
 @app.get("/auth/me", response_model=UserRead)
@@ -278,6 +281,8 @@ async def analyse_movement(
     file: UploadFile = File(...),
     sport_type: str = Form("badminton"),
     court_corners: str = Form(...),
+    final_my_score:  Optional[int] = Form(None),
+    final_opp_score: Optional[int] = Form(None),
 ):
     import json
     try:
@@ -307,8 +312,9 @@ async def analyse_movement(
 
     # 2) Score recognition — 失敗しても足跡分析は返す
     try:
+        final_score = (final_my_score, final_opp_score) if final_my_score is not None and final_opp_score is not None else None
         score_result = await asyncio.to_thread(
-            score_recognizer.run_score_analysis, tmp_path, "medium", "en", session_id
+            score_recognizer.run_score_analysis, tmp_path, "small", "en", session_id, final_score
         )
         rallies       = score_result["rallies"]
         rally_summary = score_result["summary"]
@@ -539,6 +545,76 @@ async def recognise_scores(
             os.unlink(tmp_path)
 
     return result
+
+
+@app.post("/match_sessions", status_code=201)
+def save_match_session(body: dict, current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="session_id required")
+    if sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first():
+        return {"ok": True, "session_id": session_id}
+
+    rallies = body.get("rallies") or []
+    rally_summary = body.get("rally_summary") or {}
+    last_rally = rallies[-1] if rallies else None
+    my_score  = last_rally.get("my_score")       if last_rally else rally_summary.get("user_wins", 0)
+    opp_score = last_rally.get("opponent_score")  if last_rally else rally_summary.get("opponent_wins", 0)
+
+    sqlite_db.add(db.MatchSession(
+        id=session_id,
+        user_id=current_user.id,
+        sport_type=body.get("sport_type", "badminton"),
+        opponent_name=body.get("opponent_name") or None,
+        match_comment=body.get("match_comment") or None,
+        my_score=my_score,
+        opp_score=opp_score,
+        rallies=rallies,
+        rally_summary=rally_summary,
+        phase_analysis=body.get("phase_analysis"),
+    ))
+    sqlite_db.commit()
+    return {"ok": True, "session_id": session_id}
+
+
+@app.get("/match_sessions/{session_id}")
+def get_match_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
+    ms = sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first()
+    if not ms:
+        raise HTTPException(status_code=404, detail="Match session not found")
+    return {
+        "session_id":   ms.id,
+        "sport_type":   ms.sport_type,
+        "opponent_name": ms.opponent_name,
+        "match_comment": ms.match_comment,
+        "my_score":     ms.my_score,
+        "opp_score":    ms.opp_score,
+        "rallies":      ms.rallies or [],
+        "rally_summary": ms.rally_summary or {},
+        "phase_analysis": ms.phase_analysis,
+        "created_at":   ms.created_at.isoformat(),
+    }
+
+
+@app.get("/users/me/match_history")
+def get_my_match_history(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    sessions = (
+        sqlite_db.query(db.MatchSession)
+        .filter(db.MatchSession.user_id == current_user.id)
+        .order_by(db.MatchSession.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "session_id":   ms.id,
+            "sport_type":   ms.sport_type,
+            "opponent_name": ms.opponent_name,
+            "my_score":     ms.my_score,
+            "opp_score":    ms.opp_score,
+            "created_at":   ms.created_at.isoformat(),
+        }
+        for ms in sessions
+    ]
 
 
 @app.post("/users", response_model=UserRead)

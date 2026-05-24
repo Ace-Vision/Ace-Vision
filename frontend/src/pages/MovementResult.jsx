@@ -53,7 +53,7 @@ function MovementResult() {
             >
               {oppScore}
             </p>
-            <p className="text-[11px] text-white/25 mt-2 uppercase tracking-widest">Opponent</p>
+            <p className="text-[11px] text-white/25 mt-2 uppercase tracking-widest">{opponentName || 'Opponent'}</p>
           </div>
         </div>
 

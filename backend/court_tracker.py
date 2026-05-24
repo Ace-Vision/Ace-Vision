@@ -680,11 +680,38 @@ def generate_heatmap(
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _downscale_if_needed(video_path: str, max_width: int = 1280) -> tuple[str, bool]:
+    """If video width exceeds max_width, return a downscaled temp copy; else return original."""
+    import subprocess, tempfile
+    cap = cv2.VideoCapture(video_path)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    cap.release()
+    if w <= max_width:
+        return video_path, False
+    suffix = os.path.splitext(video_path)[1] or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.close()
+    print(f"[movement] Downscaling {w}px → {max_width}px for faster processing…")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path,
+         "-vf", f"scale={max_width}:-2",
+         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+         "-c:a", "copy", tmp.name],
+        check=True, capture_output=True,
+    )
+    return tmp.name, True
+
+
 def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
     session_id = str(uuid.uuid4())
 
-    print("[movement] Extracting positions…")
-    positions, keypoints_list, fps, video_w, video_h = extract_ankle_positions(video_path)
+    work_path, is_tmp = _downscale_if_needed(video_path)
+    try:
+        print("[movement] Extracting positions…")
+        positions, keypoints_list, fps, video_w, video_h = extract_ankle_positions(work_path)
+    finally:
+        if is_tmp and os.path.exists(work_path):
+            os.unlink(work_path)
 
     H = _build_homography(court_corners, video_w, video_h)
 

@@ -44,8 +44,10 @@ _WORD_NUM_RE = re.compile(
 )
 
 def _normalise_numbers(text: str) -> str:
-    """英語の数字語をアラビア数字に変換: 'one zero' → '1 0'"""
-    return _WORD_NUM_RE.sub(lambda m: _WORD_NUMBERS[m.group(1).lower()], text)
+    """英語の数字語をアラビア数字に変換: 'one zero' → '1 0', 'two and three' → '2 3'"""
+    result = _WORD_NUM_RE.sub(lambda m: _WORD_NUMBERS[m.group(1).lower()], text)
+    result = re.sub(r'\s+and\s+', ' ', result, flags=re.IGNORECASE)
+    return result
 
 
 def extract_audio(video_path: str, out_path: str) -> None:
@@ -83,10 +85,16 @@ def transcribe_segments(
         language=language,
         word_timestamps=True,
         verbose=False,
-        temperature=0,                   # greedy decoding → 毎回同じ結果
-        condition_on_previous_text=False, # セグメント間の依存を切る → 連鎖ハリュシネーション防止
-        no_speech_threshold=0.3,         # default 0.6 → 小声のスコアアナウンスを拾うために緩める
-        logprob_threshold=-8.0,          # default -1.0 → スコア正規表現がフィルタするので緩める
+        temperature=(0, 0.2, 0.4),        # 0で失敗したら高温で再試行 → ループ脱出
+        condition_on_previous_text=False,
+        no_speech_threshold=0.3,
+        logprob_threshold=-8.0,
+        compression_ratio_threshold=2.0,  # 繰り返しセグメントを検出して再試行トリガー
+        initial_prompt=(
+            "Badminton match score announcements. After each rally, the current score is called out as two numbers — "
+            "server's score first, then receiver's. Each point goes to one side, so only one number changes at a time. "
+            "Scores are spoken as word numbers or digits. For example,  zero zero. one zero. one one. two one. two two. three two. three three."
+        ),
     )
 
     segments = []
@@ -133,9 +141,19 @@ _ISOLATED_2DIGIT_RE = re.compile(r'^\W*(\d)(\d)\W*$')
 def _try_match_text(text: str, timestamp: float, out: list[dict]) -> None:
     """テキストを正規化してスコアパターンを探し、out に追記する。"""
     normalised = _normalise_numbers(text)
-    # 数字が3つ以上 → Whisper の数字羅列ハリュシネーション → 除外
-    if len(_DIGIT_RE.findall(normalised)) > 2:
+    digits = _DIGIT_RE.findall(normalised)
+
+    if len(digits) > 2:
+        # 数字が多い → ハルシネーションの可能性。最初のマッチのみ採用。
+        m = _SCORE_RE.search(normalised)
+        if m:
+            out.append({
+                "timestamp":      timestamp,
+                "my_score":       int(m.group(1)),
+                "opponent_score": int(m.group(2)),
+            })
         return
+
     matched = False
     for m in _SCORE_RE.finditer(normalised):
         out.append({
@@ -145,9 +163,6 @@ def _try_match_text(text: str, timestamp: float, out: list[dict]) -> None:
         })
         matched = True
 
-    # フォールバック: Whisper が "one one" を "11" と書き起こした場合
-    # 生テキスト（正規化前）に対して適用することで、"eleven" → "11" の誤変換を防ぐ。
-    # Whisper が実際にアラビア数字で "11" と書いた場合だけ d0-d1 ペアとして解釈する。
     if not matched:
         m2 = _ISOLATED_2DIGIT_RE.match(text)
         if m2:
@@ -172,19 +187,36 @@ def parse_scores(segments: list[dict]) -> list[dict]:
 
     raw: list[dict] = []
 
-    for seg in valid:
+    for i, seg in enumerate(valid):
         _try_match_text(seg["text"], seg["start"], raw)
+
+        # 隣接セグメントを結合: "three" + "three" → "3 3" → (3,3) を捕捉
+        if i + 1 < len(valid):
+            nxt = valid[i + 1]
+            if nxt["start"] - seg["end"] < 2.0:
+                combined = seg["text"].rstrip(".,!") + " " + nxt["text"].lstrip()
+                _try_match_text(combined, seg["start"], raw)
 
     # (timestamp, my_score, opponent_score) の重複を除去
     seen: set[tuple] = set()
-    scores: list[dict] = []
+    deduped: list[dict] = []
     for s in raw:
         key = (s["timestamp"], s["my_score"], s["opponent_score"])
         if key not in seen:
             seen.add(key)
-            scores.append(s)
+            deduped.append(s)
 
-    return sorted(scores, key=lambda s: s["timestamp"])
+    deduped.sort(key=lambda s: s["timestamp"])
+
+    # バーストフィルタ: 3秒以内に複数検出された場合は最初のみ採用
+    # ハルシネーションループ ("3,3,3,3,3..." → 101.5s, 101.6s, ...) を除去
+    MIN_SCORE_GAP = 3.0
+    burst_filtered: list[dict] = []
+    for s in deduped:
+        if not burst_filtered or s["timestamp"] - burst_filtered[-1]["timestamp"] >= MIN_SCORE_GAP:
+            burst_filtered.append(s)
+
+    return burst_filtered
 
 
 def compute_rally_results(scores: list[dict]) -> dict:
@@ -230,31 +262,40 @@ def compute_rally_results(scores: list[dict]) -> dict:
         implicit_ts = max(0.0, first_ts - 1.0)
         deduped.insert(0, {"timestamp": implicit_ts, "my_score": 0, "opponent_score": 0})
 
-    rallies = []
+    rallies: list[dict] = []
     user_wins = 0
     opponent_wins = 0
 
-    for i, entry in enumerate(deduped):
-        if i == 0:
-            # 最初のスコアはラリー判定不可 (比較対象がない)
-            rallies.append({**entry, "rally_winner": None})
-            continue
+    # last_valid: 有効と判定された直近のスコア (無効エントリでは更新しない)
+    last_valid = deduped[0]
+    rallies.append({**last_valid, "rally_winner": None, "prev_my": None, "prev_opp": None})
 
-        prev = deduped[i - 1]
-        my_diff   = entry["my_score"]       - prev["my_score"]
-        opp_diff  = entry["opponent_score"] - prev["opponent_score"]
+    for entry in deduped[1:]:
+        my_diff  = entry["my_score"]       - last_valid["my_score"]
+        opp_diff = entry["opponent_score"] - last_valid["opponent_score"]
 
-        if my_diff > 0 and opp_diff == 0:
+        if my_diff >= 1 and opp_diff == 0:
             winner = "user"
             user_wins += 1
-        elif opp_diff > 0 and my_diff == 0:
+        elif opp_diff >= 1 and my_diff == 0:
             winner = "opponent"
             opponent_wins += 1
+        elif my_diff >= 1 and opp_diff >= 1:
+            # 両方増加: 複数ラリーが一塊になった (取りこぼし)
+            # クリップは保存するが勝者は特定できない
+            winner = "both"
         else:
-            # 両方増加 or 減少 → 認識エラーとして winner=None
-            winner = None
+            # どちらかが減少 / 変化なし → 認識エラーとして完全除外
+            # last_valid は更新しない (次のエントリを直近の有効スコアと比較するため)
+            continue
 
-        rallies.append({**entry, "rally_winner": winner})
+        rallies.append({
+            **entry,
+            "rally_winner": winner,
+            "prev_my":  last_valid["my_score"],
+            "prev_opp": last_valid["opponent_score"],
+        })
+        last_valid = entry
 
     total = user_wins + opponent_wins
     return {
@@ -356,11 +397,25 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
     return clipped
 
 
+def _get_video_duration(video_path: str) -> float:
+    """ffprobe で動画の長さ（秒）を取得する。"""
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", video_path],
+        capture_output=True, text=True,
+    )
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
 def run_score_analysis(
     video_path: str,
     model_size: str = "medium",
     language: str = "en",
     session_id: Optional[str] = None,
+    final_score: Optional[tuple[int, int]] = None,
 ) -> dict:
     """
     フルパイプライン: 音声認識 → ラリー判定 → クリップ切り出し。
@@ -384,7 +439,23 @@ def run_score_analysis(
         extract_audio(video_path, audio_path)
         segments = transcribe_segments(audio_path, model_size=model_size, language=language)
         scores   = parse_scores(segments)
-        result   = compute_rally_results(scores)
+
+        # ユーザー入力の最終スコアが優先
+        # 1) Whisperがfinal_scoreを超えて検出した分はハルシネーションとして除去
+        # 2) 最終スコアをリストに注入 → compute_rally_results が自然に処理
+        if final_score is not None:
+            final_my, final_opp = final_score
+            scores = [s for s in scores
+                      if s["my_score"] <= final_my and s["opponent_score"] <= final_opp]
+            last_ts  = scores[-1]["timestamp"] if scores else 0.0
+            duration = _get_video_duration(video_path)
+            scores.append({
+                "timestamp":      max(last_ts + 1.0, duration - 0.5),
+                "my_score":       final_my,
+                "opponent_score": final_opp,
+            })
+
+        result = compute_rally_results(scores)
     finally:
         if os.path.exists(audio_path):
             os.unlink(audio_path)
