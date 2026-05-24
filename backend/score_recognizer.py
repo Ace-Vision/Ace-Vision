@@ -216,7 +216,7 @@ def parse_scores(segments: list[dict]) -> list[dict]:
     return burst_filtered
 
 
-def compute_rally_results(scores: list[dict]) -> dict:
+def compute_rally_results(scores: list[dict], match_start_s: float = 0.0) -> dict:
     """
     Determine rally winners from a sequence of detected scores.
 
@@ -260,9 +260,7 @@ def compute_rally_results(scores: list[dict]) -> dict:
     # If the first detected score is not 0-0, insert an implicit 0-0 as match start.
     # Placed 1 second before the first detection to avoid zero-length clips.
     if deduped and not (deduped[0]["my_score"] == 0 and deduped[0]["opponent_score"] == 0):
-        first_ts = deduped[0]["timestamp"]
-        implicit_ts = max(0.0, first_ts - 1.0)
-        deduped.insert(0, {"timestamp": implicit_ts, "my_score": 0, "opponent_score": 0})
+        deduped.insert(0, {"timestamp": match_start_s, "my_score": 0, "opponent_score": 0})
 
     rallies: list[dict] = []
     user_wins = 0
@@ -417,6 +415,7 @@ def run_score_analysis(
     language: str = "en",
     session_id: Optional[str] = None,
     final_score: Optional[tuple[int, int]] = None,
+    match_start_s: float = 0.0,
 ) -> dict:
     """
     Full pipeline: speech recognition → rally determination → clip extraction.
@@ -460,7 +459,7 @@ def run_score_analysis(
                 "opponent_score": final_opp,
             })
 
-        result = compute_rally_results(scores)
+        result = compute_rally_results(scores, match_start_s=match_start_s)
     finally:
         if os.path.exists(audio_path):
             os.unlink(audio_path)

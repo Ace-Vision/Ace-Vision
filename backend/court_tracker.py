@@ -754,12 +754,16 @@ def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
     print("[movement] Running phase analysis…")
     phase_analysis = generate_phase_analysis(positions, H, video_w, video_h, session_id)
 
+    first_valid = next((p for p in positions if p is not None), None)
+    match_start_s = round(first_valid["time_s"], 3) if first_valid else 0.0
+
     return {
         "session_id":          session_id,
         "movement_video_path": out_path,
         "total_positions":     sum(1 for p in positions if p is not None),
         "duration_s":          round(len(positions) * MOVEMENT_STRIDE / fps, 1),
         "phase_analysis":      phase_analysis,
+        "match_start_s":       match_start_s,
         # Internal data passed to generate_heatmap() in main.py
         "_positions": positions,
         "_H":         H,
