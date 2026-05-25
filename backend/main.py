@@ -53,11 +53,17 @@ if not API_KEY:
 gemini = vlm.gemini_model(API_KEY)
 
 app = FastAPI(title="Ace Vision API")
+_progress: dict[str, dict] = {}
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
 if os.path.isdir(_FRONTEND_BUILD):
     app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
+
+
+@app.get("/progress/{job_id}")
+async def get_progress(job_id: str):
+    return _progress.get(job_id, {"pct": 0, "step": "Queued…", "done": False})
 
 
 @app.on_event("startup")
@@ -283,6 +289,7 @@ async def analyse_movement(
     court_corners: str = Form(...),
     final_my_score:  Optional[int] = Form(None),
     final_opp_score: Optional[int] = Form(None),
+    job_id: Optional[str] = Form(None),
 ):
     import json
     try:
@@ -297,25 +304,36 @@ async def analyse_movement(
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
+    import time as _time
+
+    def _update(pct: int, step: str):
+        if job_id:
+            _progress[job_id] = {"pct": pct, "step": step, "done": pct >= 100}
+
+    _update(2, "Received video…")
+
     # 1) Court movement analysis
+    _t0 = _time.perf_counter()
     try:
         court_result = await asyncio.to_thread(
-            court_tracker.run_court_analysis, tmp_path, corners
+            court_tracker.run_court_analysis, tmp_path, corners, _update
         )
     except Exception as exc:
         import traceback; traceback.print_exc()
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise HTTPException(status_code=500, detail=str(exc))
+    print(f"[timing] run_court_analysis total: {_time.perf_counter()-_t0:.1f}s")
 
     session_id = court_result["session_id"]
 
     # 2) Score recognition — movement result is returned even if this fails
+    _t1 = _time.perf_counter()
     try:
         final_score = (final_my_score, final_opp_score) if final_my_score is not None and final_opp_score is not None else None
         score_result = await asyncio.to_thread(
             score_recognizer.run_score_analysis, tmp_path, "tiny", "en", session_id, final_score,
-            court_result.get("match_start_s"),
+            court_result.get("match_start_s"), _update,
         )
         rallies       = score_result["rallies"]
         rally_summary = score_result["summary"]
@@ -326,8 +344,11 @@ async def analyse_movement(
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+    print(f"[timing] run_score_analysis total: {_time.perf_counter()-_t1:.1f}s")
 
     # 3) Heatmap — other results are returned even if this fails
+    _update(90, "Generating heatmaps…")
+    _t2 = _time.perf_counter()
     try:
         await asyncio.to_thread(
             court_tracker.generate_heatmap,
@@ -341,6 +362,8 @@ async def analyse_movement(
         )
     except Exception:
         import traceback; traceback.print_exc()
+    print(f"[timing] generate_heatmap total: {_time.perf_counter()-_t2:.1f}s")
+    _update(100, "Done")
 
     return {
         "session_id":      session_id,

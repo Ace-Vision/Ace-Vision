@@ -343,7 +343,7 @@ def recognize_scores(
             os.unlink(audio_path)
 
 
-def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -> list[dict]:
+def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str, progress_cb=None) -> list[dict]:
     """
     Cut and save a video clip for each rally (clips run in parallel).
 
@@ -380,15 +380,18 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
         })
         clip_idx += 1
 
+    total_clips = len(tasks)
+
     def _cut(task: dict) -> dict:
         out_path = os.path.join(out_dir, task["filename"])
         subprocess.run(
             [
                 "ffmpeg", "-y",
+                "-hwaccel", "auto",          # hardware-accelerated decode (fast for HEVC/4K)
                 "-ss", str(task["start_s"]),
                 "-to", str(task["end_s"]),
                 "-i", video_path,
-                "-c:v", "libx264", "-preset", "fast",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                 "-c:a", "aac",
                 "-movflags", "+faststart",
                 out_path,
@@ -400,11 +403,16 @@ def extract_rally_clips(video_path: str, rallies: list[dict], session_id: str) -
 
     # Run ffmpeg jobs in parallel (capped at 4 to avoid I/O saturation)
     completed: dict[int, dict] = {}
+    done_count = 0
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_cut, t): t for t in tasks}
         for future in as_completed(futures):
             task = future.result()
             completed[task["index"]] = task
+            done_count += 1
+            if progress_cb and total_clips > 0:
+                raw = done_count / total_clips
+                progress_cb(79 + int(raw * 10), f"Cutting rally clips… {done_count}/{total_clips}")
 
     return [
         {
@@ -439,6 +447,7 @@ def run_score_analysis(
     session_id: Optional[str] = None,
     final_score: Optional[tuple[int, int]] = None,
     match_start_s: float = 0.0,
+    progress_cb=None,
 ) -> dict:
     """
     Full pipeline: speech recognition → rally determination → clip extraction.
@@ -463,9 +472,21 @@ def run_score_analysis(
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         audio_path = tmp.name
 
+    def _p(pct, step):
+        if progress_cb:
+            progress_cb(pct, step)
+
     try:
+        import time as _time
+        _p(57, "Extracting audio…")
+        _t = _time.perf_counter()
         extract_audio(video_path, audio_path)
+        print(f"[timing] audio extraction: {_time.perf_counter()-_t:.1f}s")
+        _p(60, "Recognizing scores…")
+        _t = _time.perf_counter()
         segments = transcribe_segments(audio_path, model_size=model_size, language=language)
+        print(f"[timing] whisper transcription: {_time.perf_counter()-_t:.1f}s")
+        _p(76, "Processing scores…")
         scores   = parse_scores(segments)
 
         if final_score is not None:
@@ -483,11 +504,12 @@ def run_score_analysis(
             })
 
         result = compute_rally_results(scores, match_start_s=match_start_s)
+        _p(79, "Cutting rally clips…")
     finally:
         if os.path.exists(audio_path):
             os.unlink(audio_path)
 
-    clipped = extract_rally_clips(video_path, result["rallies"], session_id)
+    clipped = extract_rally_clips(video_path, result["rallies"], session_id, progress_cb=progress_cb)
 
     return {
         "session_id": session_id,

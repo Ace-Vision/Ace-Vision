@@ -10,6 +10,7 @@ This is simpler and more robust than velocity-based ID tracking.
 
 import json
 import os
+import subprocess
 import uuid
 import math
 
@@ -61,7 +62,10 @@ def _to_kp_dict(lms) -> dict:
 
 # ── Pose extraction ───────────────────────────────────────────────────────────
 
-def extract_ankle_positions(video_path: str) -> tuple[list, list, float, int, int]:
+MAX_MEDIAPIPE_WIDTH = 1280  # frames wider than this are resized in-memory before MediaPipe
+
+
+def extract_ankle_positions(video_path: str, progress_cb=None, pct_start: int = 5, pct_end: int = 45) -> tuple[list, list, float, int, int]:
     """
     Extract user's ankle midpoint + full keypoints for each sampled frame.
 
@@ -75,6 +79,16 @@ def extract_ankle_positions(video_path: str) -> tuple[list, list, float, int, in
     video_h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
+    total_sampled = max(1, total_frames // MOVEMENT_STRIDE)
+
+    # Scale factor for MediaPipe input — landmarks are normalised so results are identical
+    if video_w > MAX_MEDIAPIPE_WIDTH:
+        mp_scale = MAX_MEDIAPIPE_WIDTH / video_w
+        mp_w = MAX_MEDIAPIPE_WIDTH
+        mp_h = int(video_h * mp_scale)
+    else:
+        mp_scale = 1.0
+        mp_w, mp_h = video_w, video_h
 
     base = python.BaseOptions(model_asset_path="models/pose_landmarker.task")
     opts = vision.PoseLandmarkerOptions(
@@ -90,13 +104,20 @@ def extract_ankle_positions(video_path: str) -> tuple[list, list, float, int, in
     positions:    list = []
     keypoints_list: list = [{}] * total_frames   # sparse; indexed by frame number
     frame_idx = 0
+    sampled_count = 0
 
     while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
         if frame_idx % MOVEMENT_STRIDE == 0:
+            # Full decode only for sampled frames
+            ret, frame = cap.read()
+            if not ret:
+                break
+            sampled_count += 1
+            if progress_cb and sampled_count % 25 == 0:
+                raw_pct = min(1.0, sampled_count / total_sampled)
+                progress_cb(pct_start + int(raw_pct * (pct_end - pct_start)), f"Analyzing movement… {int(raw_pct * 100)}%")
+            if mp_scale < 1.0:
+                frame = cv2.resize(frame, (mp_w, mp_h), interpolation=cv2.INTER_LINEAR)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_img    = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=frame_rgb)
             ts        = int(frame_idx / fps * 1000)
@@ -115,6 +136,10 @@ def extract_ankle_positions(video_path: str) -> tuple[list, list, float, int, in
                     "y": ay,
                 })
                 keypoints_list[frame_idx] = _to_kp_dict(user_lms)
+        else:
+            # Cheap advance — no pixel decode
+            if not cap.grab():
+                break
 
         frame_idx += 1
 
@@ -679,57 +704,99 @@ def generate_heatmap(
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def _downscale_if_needed(video_path: str, max_width: int = 1280) -> tuple[str, bool]:
-    """If video width exceeds max_width, return a downscaled temp copy; else return original."""
-    import subprocess, tempfile
+def _downscale_if_needed(video_path: str, max_width: int = 1280, progress_cb=None) -> tuple[str, bool]:
+    """
+    If video width exceeds max_width, return a downscaled temp copy; else return original.
+    Uses -hwaccel auto (VideoToolbox on Mac) for fast HEVC decode.
+    Reports per-frame progress via progress_cb in the 3%→44% band.
+    """
+    import tempfile
     cap = cv2.VideoCapture(video_path)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    w            = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
     cap.release()
     if w <= max_width:
         return video_path, False
-    suffix = os.path.splitext(video_path)[1] or ".mp4"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tmp.close()
-    print(f"[movement] Downscaling {w}px → {max_width}px for faster processing…")
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", video_path,
-         "-vf", f"scale={max_width}:-2",
-         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
-         "-c:a", "copy", tmp.name],
-        check=True, capture_output=True,
+    print(f"[movement] Downscaling {w}px → {max_width}px…")
+
+    if progress_cb:
+        progress_cb(3, f"Resizing video ({w}px → {max_width}px)… 0%")
+
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y",
+            "-hwaccel", "auto",
+            "-i", video_path,
+            "-vf", f"scale={max_width}:-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-an",
+            "-progress", "pipe:1",   # stream progress to stdout
+            tmp.name,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
     )
+
+    for line in proc.stdout:
+        if progress_cb and line.startswith("frame="):
+            try:
+                frame = int(line.split("=")[1])
+                raw = min(1.0, frame / total_frames)
+                progress_cb(3 + int(raw * 41), f"Resizing video ({w}px → {max_width}px)… {int(raw * 100)}%")
+            except (ValueError, IndexError):
+                pass
+
+    proc.wait()
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, "ffmpeg")
+
     return tmp.name, True
 
 
-def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
+def run_court_analysis(video_path: str, court_corners: list[dict], progress_cb=None) -> dict:
+    import time
     session_id = str(uuid.uuid4())
 
-    work_path, is_tmp = _downscale_if_needed(video_path)
+    def _p(pct, step):
+        if progress_cb:
+            progress_cb(pct, step)
+
+    t0 = time.perf_counter()
+    _p(2, "Checking video…")
+    work_path, is_tmp = _downscale_if_needed(video_path, progress_cb=_p)
+    # After downscale (4K): 45-55%  |  No downscale (1080p): 5-45%
+    mp_start, mp_end = (45, 55) if is_tmp else (5, 45)
     try:
-        print("[movement] Extracting positions…")
-        positions, keypoints_list, fps, video_w, video_h = extract_ankle_positions(work_path)
+        _p(mp_start, "Analyzing movement… 0%")
+        positions, keypoints_list, fps, video_w, video_h = extract_ankle_positions(
+            work_path, progress_cb=_p, pct_start=mp_start, pct_end=mp_end
+        )
     finally:
         if is_tmp and os.path.exists(work_path):
             os.unlink(work_path)
+    print(f"[timing] MediaPipe pose extraction: {time.perf_counter()-t0:.1f}s")
 
     H = _build_homography(court_corners, video_w, video_h)
 
-    print("[movement] Filtering out-of-bounds detections…")
+    t1 = time.perf_counter()
+    _p(46, "Filtering detections…")
     positions = _invalidate_out_of_bounds(positions, H, video_w, video_h)
-
-    print("[movement] Smoothing trajectory…")
     positions = _smooth_positions(positions)
-
-    print("[movement] Detecting shots by wrist speed…")
     shot_frames = detect_shots_by_wrist_speed(keypoints_list, fps)
+    print(f"[timing] Filter+smooth+shots: {time.perf_counter()-t1:.1f}s")
 
-    print("[movement] Rendering bird's-eye video…")
+    t2 = time.perf_counter()
+    _p(49, "Rendering bird's-eye view…")
     out_path = generate_movement_video(
         positions, H, video_w, video_h, fps, session_id, shot_frames=shot_frames
     )
-    print(f"[movement] Done → {out_path}")
+    print(f"[timing] Movement video render: {time.perf_counter()-t2:.1f}s")
 
-    # Save court-transformed positions for frontend minimap
+    t3 = time.perf_counter()
     court_pts_export = []
     for p in positions:
         if p is None:
@@ -746,8 +813,9 @@ def run_court_analysis(video_path: str, court_corners: list[dict]) -> dict:
     with open(os.path.join(results_dir, "positions.json"), "w") as _pf:
         json.dump(court_pts_export, _pf)
 
-    print("[movement] Running phase analysis…")
+    _p(52, "Running phase analysis…")
     phase_analysis = generate_phase_analysis(positions, H, video_w, video_h, session_id)
+    print(f"[timing] Phase analysis + heatmaps: {time.perf_counter()-t3:.1f}s")
 
     first_valid = next((p for p in positions if p is not None), None)
     match_start_s = round(first_valid["time_s"], 3) if first_valid else 0.0

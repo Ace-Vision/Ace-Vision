@@ -117,12 +117,18 @@ function Home() {
   const [matchComment, setMatchComment] = useState('');
   const [finalMyScore,  setFinalMyScore]  = useState('');
   const [finalOppScore, setFinalOppScore] = useState('');
+  const [progressInfo, setProgressInfo] = useState({ pct: 0, step: 'Preparing…' });
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
   const uploadInputRef = useRef(null);
+  const jobIdRef = useRef(null);
+  const pollRef = useRef(null);
+  const tickRef = useRef(null);
+  const startTimeRef = useRef(null);
 
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
@@ -153,6 +159,25 @@ function Home() {
     setCameraOpen(false);
     setStep('loading');
     setError(null);
+    setProgressInfo({ pct: 0, step: 'Preparing…' });
+    setElapsedSec(0);
+
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    jobIdRef.current = jobId;
+    startTimeRef.current = Date.now();
+
+    if (mode === 'match') {
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/progress/${jobId}`);
+          if (r.ok) setProgressInfo(await r.json());
+        } catch {}
+      }, 700);
+      tickRef.current = setInterval(() => {
+        setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 1000);
+    }
+
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -162,6 +187,7 @@ function Home() {
         endpoint = '/analyse_movement';
         dest     = '/movement-result';
         formData.append('sport_type', sport);
+        formData.append('job_id', jobId);
         if (corners) formData.append('court_corners', JSON.stringify(corners));
         if (finalMyScore !== '' && finalOppScore !== '') {
           formData.append('final_my_score',  finalMyScore);
@@ -205,6 +231,9 @@ function Home() {
     } catch (err) {
       setError(err.message);
       setStep('action');
+    } finally {
+      clearInterval(pollRef.current);
+      clearInterval(tickRef.current);
     }
   }
 
@@ -321,6 +350,22 @@ function Home() {
                 />
               </div>
             </div>
+          </div>
+        )}
+
+        {mode === 'match' && (
+          <div className="w-full max-w-sm space-y-2">
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs text-white/40 truncate">{progressInfo.step}</span>
+              <span className="text-xs font-mono text-white/60 shrink-0 tabular-nums">{progressInfo.pct}%</span>
+            </div>
+            <div className="w-full h-[3px] bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[#C8FF57] rounded-full"
+                style={{ width: `${progressInfo.pct}%`, transition: 'width 0.5s ease-out' }}
+              />
+            </div>
+            <p className="text-right text-[11px] text-white/20 font-mono tabular-nums">{elapsedSec}s</p>
           </div>
         )}
 
