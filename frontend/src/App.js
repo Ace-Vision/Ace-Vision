@@ -8,6 +8,9 @@ import MovementResult from './pages/MovementResult';
 import RallyResult    from './pages/RallyResult';
 import Advice         from './pages/Advice';
 import MatchHistory   from './pages/MatchHistory';
+import Insights       from './pages/Insights';
+import OpponentBook   from './pages/OpponentBook';
+import OpponentDetail from './pages/OpponentDetail';
 
 function isTokenValid() {
   if (localStorage.getItem('guest') === 'true') return true;
@@ -43,6 +46,9 @@ function App() {
         <Route path="/rally-result"    element={<PrivateRoute element={<RallyResult />} />}    />
         <Route path="/advice"       element={<PrivateRoute element={<Advice />} />}      />
         <Route path="/match-history" element={<PrivateRoute element={<MatchHistory />} />} />
+        <Route path="/insights"      element={<PrivateRoute element={<Insights />} />} />
+        <Route path="/opponent-book"   element={<PrivateRoute element={<OpponentBook />} />} />
+        <Route path="/opponent-detail" element={<PrivateRoute element={<OpponentDetail />} />} />
         <Route path="*"       element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

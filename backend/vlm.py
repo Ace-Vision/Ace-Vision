@@ -489,3 +489,58 @@ Be direct, warm, and specific. 100–140 words total. No bullet points."""
         )
         text = (response.text or "").strip()
         return text if text else None
+
+    def get_opponent_coaching(self, data: dict) -> str | None:
+        """
+        Tactical scouting advice for a specific opponent, based on:
+        - Aggregated loss tags across all matches vs. that opponent
+        - Court zone analysis (where the opponent pushes the user)
+        - User's own match comments
+        """
+        opponent_name  = (data.get("opponent_name") or "this opponent").strip()
+        sport_type     = data.get("sport_type", "badminton")
+        total_matches  = data.get("total_matches", 0)
+        total_wins     = data.get("total_wins", 0)
+        total_losses   = data.get("total_losses", 0)
+        mistake_counts = data.get("mistake_counts", {})
+        zone_info      = (data.get("zone_description") or "").strip()
+        comments       = [c for c in (data.get("comments") or []) if c and c.strip()]
+
+        sport_label  = "badminton" if sport_type == "badminton" else "tennis"
+        swing_miss   = mistake_counts.get("swing_miss", 0)
+        bad_footwork = mistake_counts.get("bad_footwork", 0)
+        other        = mistake_counts.get("other", 0)
+        total_tagged = swing_miss + bad_footwork + other
+
+        comments_block = "\n".join(f'  - "{c.strip()}"' for c in comments) or "  (none)"
+        zone_block     = zone_info if zone_info else "  No significant zone pattern detected."
+
+        prompt = f"""You are an expert {sport_label} coach preparing a player for their next match against a specific opponent.
+
+OPPONENT: {opponent_name}
+HEAD-TO-HEAD RECORD: {total_wins}W – {total_losses}L across {total_matches} matches
+
+MISTAKES IN MATCHES AGAINST {opponent_name.upper()} ({total_tagged} tagged losses):
+  Swing miss:   {swing_miss}
+  Bad footwork: {bad_footwork}
+  Other:        {other}
+
+COURT ZONE PATTERN (where {opponent_name} tends to push the player):
+{zone_block}
+
+PLAYER'S NOTES FROM PAST MATCHES VS {opponent_name.upper()}:
+{comments_block}
+
+Write a targeted scouting report and tactical advice. Follow this structure exactly:
+- Paragraph 1 (2–3 sentences): Identify the main pattern {opponent_name} exploits, based on the mistake data and zone info. Be specific.
+- Paragraph 2 (1–2 sentences): Give one concrete tactical adjustment or drill to counter it.
+- Final sentence: Set a clear goal for the next match against {opponent_name}.
+
+Be direct, warm, and specific. 100–140 words total. No bullet points."""
+
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+        )
+        text = (response.text or "").strip()
+        return text if text else None

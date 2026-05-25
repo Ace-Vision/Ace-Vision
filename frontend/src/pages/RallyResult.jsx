@@ -3,6 +3,21 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
+// ── Finalization helpers ───────────────────────────────────────────────────────
+const FINALIZED_KEY = 'avFinalized';
+function isFinalized(sessionId) {
+  if (!sessionId) return false;
+  try { return JSON.parse(localStorage.getItem(FINALIZED_KEY) || '[]').includes(sessionId); }
+  catch { return false; }
+}
+function finalizeSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    const list = JSON.parse(localStorage.getItem(FINALIZED_KEY) || '[]');
+    if (!list.includes(sessionId)) { list.push(sessionId); localStorage.setItem(FINALIZED_KEY, JSON.stringify(list)); }
+  } catch {}
+}
+
 const LABEL_OPTIONS = [
   { value: 'swing_miss',   label: 'Swing Miss' },
   { value: 'bad_footwork', label: 'Bad Footwork' },
@@ -140,28 +155,36 @@ function PieChart({ slices }) {
   if (total === 0) return null;
 
   const cx = 50, cy = 50, R = 40, ir = 24;
-  let angle = -Math.PI / 2;
-
-  const paths = active.map(slice => {
-    const startA = angle;
-    const sweep  = (slice.count / total) * 2 * Math.PI;
-    angle += sweep;
-    const endA = angle;
-    const large = sweep > Math.PI ? 1 : 0;
-
-    const x1  = cx + R  * Math.cos(startA), y1  = cy + R  * Math.sin(startA);
-    const x2  = cx + R  * Math.cos(endA),   y2  = cy + R  * Math.sin(endA);
-    const ix1 = cx + ir * Math.cos(startA), iy1 = cy + ir * Math.sin(startA);
-    const ix2 = cx + ir * Math.cos(endA),   iy2 = cy + ir * Math.sin(endA);
-
-    const d = `M${x1} ${y1} A${R} ${R} 0 ${large} 1 ${x2} ${y2} L${ix2} ${iy2} A${ir} ${ir} 0 ${large} 0 ${ix1} ${iy1}Z`;
-    return { ...slice, d };
-  });
+  const isSingle = active.length === 1;
+  let paths = [];
+  if (!isSingle) {
+    let angle = -Math.PI / 2;
+    paths = active.map(slice => {
+      const startA = angle;
+      const sweep  = (slice.count / total) * 2 * Math.PI;
+      angle += sweep;
+      const endA = angle;
+      const large = sweep > Math.PI ? 1 : 0;
+      const x1  = cx + R  * Math.cos(startA), y1  = cy + R  * Math.sin(startA);
+      const x2  = cx + R  * Math.cos(endA),   y2  = cy + R  * Math.sin(endA);
+      const ix1 = cx + ir * Math.cos(startA), iy1 = cy + ir * Math.sin(startA);
+      const ix2 = cx + ir * Math.cos(endA),   iy2 = cy + ir * Math.sin(endA);
+      const d = `M${x1} ${y1} A${R} ${R} 0 ${large} 1 ${x2} ${y2} L${ix2} ${iy2} A${ir} ${ir} 0 ${large} 0 ${ix1} ${iy1}Z`;
+      return { ...slice, d };
+    });
+  }
 
   return (
     <div className="flex items-center gap-6">
       <svg viewBox="0 0 100 100" style={{ width: 110, height: 110, flexShrink: 0 }}>
-        {paths.map((p, i) => <path key={i} d={p.d} fill={p.color} />)}
+        {isSingle ? (
+          <>
+            <circle cx={cx} cy={cy} r={R} fill={active[0].color} />
+            <circle cx={cx} cy={cy} r={ir} fill="#0d0d0d" />
+          </>
+        ) : (
+          paths.map((p, i) => <path key={i} d={p.d} fill={p.color} />)
+        )}
       </svg>
       <div className="space-y-2.5">
         {active.map((s, i) => (
@@ -177,7 +200,7 @@ function PieChart({ slices }) {
 }
 
 // Single rally page
-function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, isLast, courtPositions }) {
+function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, isLast, courtPositions, isLocked }) {
   const isBoth = rally.rally_winner === 'both';
   const isWin  = rally.rally_winner === 'user';
 
@@ -263,9 +286,12 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
       {/* Tag buttons — one slot per opponent point in this clip */}
       {oppDiff > 0 && (
         <div className="space-y-3">
-          <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">
-            {oppDiff > 1 ? `Tag losses (${oppDiff})` : 'Tag this loss'}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">
+              {oppDiff > 1 ? `Tag losses (${oppDiff})` : 'Tag this loss'}
+            </p>
+            {isLocked && <span className="text-[10px] text-white/20">🔒</span>}
+          </div>
           {Array.from({ length: oppDiff }).map((_, lossIdx) => {
             const key = `${rally.index}_${lossIdx}`;
             const sel = labels[key];
@@ -280,11 +306,12 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
                   {LABEL_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
-                      onClick={() => onLabel(key, sel === opt.value ? null : opt.value)}
+                      onClick={() => !isLocked && onLabel(key, sel === opt.value ? null : opt.value)}
+                      disabled={isLocked}
                       className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95"
                       style={sel === opt.value
-                        ? { background: '#FF6B6B', color: '#000' }
-                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }
+                        ? { background: isLocked ? 'rgba(255,107,107,0.4)' : '#FF6B6B', color: isLocked ? 'rgba(0,0,0,0.5)' : '#000' }
+                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', opacity: isLocked ? 0.5 : 1 }
                       }
                     >
                       {opt.label}
@@ -299,14 +326,22 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
 
       {/* Rally note */}
       <div>
-        <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest mb-2">Note</p>
+        <div className="flex items-center gap-2 mb-2">
+          <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">Note</p>
+          {isLocked && <span className="text-[10px] text-white/20">🔒</span>}
+        </div>
         <textarea
           value={note || ''}
-          onChange={e => onNote(rally.index, e.target.value)}
-          placeholder="Add a note about this rally…"
+          onChange={e => !isLocked && onNote(rally.index, e.target.value)}
+          readOnly={isLocked}
+          placeholder={isLocked ? '' : 'Add a note about this rally…'}
           rows={2}
           className="w-full px-3 py-2.5 rounded-xl text-xs text-white placeholder:text-white/15 outline-none resize-none"
-          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
+          style={{
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            opacity: isLocked ? 0.5 : 1,
+          }}
         />
       </div>
 
@@ -324,7 +359,9 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
 }
 
 // Final summary page
-function SummaryPage({ summary, totalLossSlots, labels, onHome, feedback, feedbackLoading, feedbackError, opponentName }) {
+function SummaryPage({ summary, totalLossSlots, labels, onHome, onHistory, fromHistory, feedback, feedbackLoading, feedbackError, opponentName, sessionId }) {
+  // Lock the session the moment the user sees the summary
+  useEffect(() => { finalizeSession(sessionId); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const counts = { swing_miss: 0, bad_footwork: 0, other: 0 };
   Object.values(labels).forEach(l => {
     if (l in counts) counts[l]++;
@@ -393,12 +430,21 @@ function SummaryPage({ summary, totalLossSlots, labels, onHome, feedback, feedba
         ) : null}
       </div>
 
-      <button
-        onClick={onHome}
-        className="w-full py-4 rounded-2xl bg-white/[0.04] border border-white/[0.07] text-sm font-semibold text-white/30 hover:bg-white/[0.07] transition-colors"
-      >
-        Analyze Again
-      </button>
+      {fromHistory ? (
+        <button
+          onClick={onHistory}
+          className="w-full py-4 rounded-2xl bg-white/[0.04] border border-white/[0.07] text-sm font-semibold text-white/30 hover:bg-white/[0.07] transition-colors"
+        >
+          View Other Matches
+        </button>
+      ) : (
+        <button
+          onClick={onHome}
+          className="w-full py-4 rounded-2xl bg-white/[0.04] border border-white/[0.07] text-sm font-semibold text-white/30 hover:bg-white/[0.07] transition-colors"
+        >
+          Analyze Again
+        </button>
+      )}
 
     </div>
   );
@@ -416,6 +462,7 @@ function RallyResult() {
   const opponentName = state?.opponentName ?? '';
   const matchComment = state?.matchComment ?? '';
   const sport        = state?.sport ?? 'badminton';
+  const fromHistory  = state?.fromHistory ?? false;
 
   const [page, setPage] = useState(0);
   const [labels, setLabels] = useState({});
@@ -424,6 +471,8 @@ function RallyResult() {
   const [feedback, setFeedback] = useState(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackError, setFeedbackError] = useState(null); // 'quota' | 'error' | null
+
+  const locked = isFinalized(session_id);
 
   // Fetch persisted labels — keys are strings like "5_0", "5_1"
   useEffect(() => {
@@ -552,10 +601,13 @@ function RallyResult() {
             totalLossSlots={totalLossSlots}
             labels={labels}
             onHome={() => navigate('/home')}
+            onHistory={() => navigate('/match-history')}
+            fromHistory={fromHistory}
             feedback={feedback}
             feedbackLoading={feedbackLoading}
             feedbackError={feedbackError}
             opponentName={opponentName}
+            sessionId={session_id}
           />
         ) : (
           <RallyPage
@@ -569,6 +621,7 @@ function RallyResult() {
             onNext={() => setPage(p => p + 1)}
             isLast={page === enriched.length - 1}
             courtPositions={courtPositions}
+            isLocked={locked}
           />
         )}
       </div>

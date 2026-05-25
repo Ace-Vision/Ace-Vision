@@ -104,10 +104,13 @@ function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
 
 function Home() {
   const navigate = useNavigate();
+  const preferredSport = localStorage.getItem('preferred_sport');
+  const isLoggedIn = !!(localStorage.getItem('token')) && localStorage.getItem('guest') !== 'true';
   // step: 'sport' | 'mode' | 'action' | 'calibrate' | 'loading'
-  const [step, setStep] = useState('sport');
-  const [sport, setSport] = useState(null);
+  const [step, setStep] = useState(preferredSport ? 'mode' : 'sport');
+  const [sport, setSport] = useState(preferredSport || null);
   const [mode, setMode] = useState(null); // 'form' | 'match'
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState(null);
@@ -130,6 +133,12 @@ function Home() {
   const tickRef = useRef(null);
   const startTimeRef = useRef(null);
 
+  // Refs so async uploadFile always reads the latest values (state would be stale in the closure)
+  const opponentNameRef = useRef('');
+  const matchCommentRef = useRef('');
+  useEffect(() => { opponentNameRef.current = opponentName; }, [opponentName]);
+  useEffect(() => { matchCommentRef.current = matchComment; }, [matchComment]);
+
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
@@ -138,7 +147,14 @@ function Home() {
 
   function selectSport(s) {
     setSport(s);
+    if (isLoggedIn) localStorage.setItem('preferred_sport', s);
     setStep('mode');
+  }
+
+  function changeSport(s) {
+    setSport(s);
+    localStorage.setItem('preferred_sport', s);
+    setSettingsOpen(false);
   }
 
   function selectMode(m) {
@@ -216,8 +232,8 @@ function Home() {
             body: JSON.stringify({
               session_id:    result.session_id,
               sport_type:    sport,
-              opponent_name: opponentName || null,
-              match_comment: matchComment || null,
+              opponent_name: opponentNameRef.current || null,
+              match_comment: matchCommentRef.current || null,
               rallies:       result.rallies || [],
               rally_summary: result.rally_summary || {},
               phase_analysis: result.phase_analysis || null,
@@ -227,7 +243,7 @@ function Home() {
         }
       }
 
-      navigate(dest, { state: { result, sport, mode, file, opponentName, matchComment } });
+      navigate(dest, { state: { result, sport, mode, file, opponentName: opponentNameRef.current, matchComment: matchCommentRef.current } });
     } catch (err) {
       setError(err.message);
       setStep('action');
@@ -424,13 +440,28 @@ function Home() {
     const isGuest = localStorage.getItem('guest') === 'true';
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center px-8">
-        <div className="px-5 pt-14 pb-6 flex items-center gap-3 absolute top-0 left-0 animate-fade-up-slow">
-          <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
-            ‹
-          </button>
-          <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
-            {sport === 'badminton' ? 'Badminton' : 'Tennis'}
-          </span>
+        <div className="px-5 pt-14 pb-6 flex items-center justify-between absolute top-0 left-0 right-0 animate-fade-up-slow">
+          <div className="flex items-center gap-3">
+            {!isLoggedIn && (
+              <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+                ‹
+              </button>
+            )}
+            <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+              {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+            </span>
+          </div>
+          {isLoggedIn && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="text-white/25 hover:text-white/50 transition-colors p-1"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+          )}
         </div>
 
         <div className="w-full flex flex-col items-center">
@@ -481,24 +512,61 @@ function Home() {
               </div>
             </button>
 
-            {/* Match history — only for logged-in users */}
+            {/* Training — only for logged-in users */}
             {!isGuest && (
               <button
-                onClick={() => navigate('/match-history')}
+                onClick={() => navigate('/insights')}
                 className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
                 style={{ animationDelay: '0.75s' }}
               >
                 <div className="text-white font-semibold mb-1" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
-                  History
+                  Insights
                 </div>
                 <div className="text-white/30 text-xs leading-relaxed">
-                  Review past match analyses.
+                  Trends, history and opponent notes.
                 </div>
               </button>
             )}
 
           </div>
         </div>
+
+        {/* Settings sheet */}
+        {settingsOpen && (
+          <div
+            className="fixed inset-0 z-50 flex flex-col justify-end"
+            style={{ background: 'rgba(0,0,0,0.65)' }}
+            onClick={() => setSettingsOpen(false)}
+          >
+            <div
+              className="rounded-t-3xl px-6 pt-5 pb-12"
+              style={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-6" />
+              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
+                Your sport
+              </p>
+              <div className="flex gap-3">
+                {[{ value: 'badminton', label: 'Badminton' }, { value: 'tennis_serve', label: 'Tennis' }].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => changeSport(value)}
+                    className="flex-1 py-4 rounded-2xl text-sm font-semibold transition-all active:scale-95"
+                    style={
+                      sport === value
+                        ? { background: '#C8FF57', color: '#000' }
+                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     );
   }

@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 
 from backend.schemas import (
     AnalyseResponse, MatchAnalyseResponse, UserCreate, UserRead, SessionRead,
@@ -44,7 +44,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -72,10 +71,10 @@ def startup_event():
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
 
 def create_access_token(data: dict) -> str:
     payload = data.copy()
@@ -601,6 +600,19 @@ def save_match_session(body: dict, current_user: db.User = Depends(get_current_u
     return {"ok": True, "session_id": session_id}
 
 
+@app.patch("/match_sessions/{session_id}")
+def update_match_session(session_id: str, body: dict, sqlite_db: Session = Depends(db.get_db)):
+    ms = sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first()
+    if not ms:
+        raise HTTPException(status_code=404, detail="Match session not found")
+    if "opponent_name" in body:
+        ms.opponent_name = body["opponent_name"] or None
+    if "match_comment" in body:
+        ms.match_comment = body["match_comment"] or None
+    sqlite_db.commit()
+    return {"ok": True}
+
+
 @app.get("/match_sessions/{session_id}")
 def get_match_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
     ms = sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first()
@@ -630,15 +642,90 @@ def get_my_match_history(current_user: db.User = Depends(get_current_user), sqli
     )
     return [
         {
-            "session_id":   ms.id,
-            "sport_type":   ms.sport_type,
+            "session_id":    ms.id,
+            "sport_type":    ms.sport_type,
             "opponent_name": ms.opponent_name,
-            "my_score":     ms.my_score,
-            "opp_score":    ms.opp_score,
-            "created_at":   ms.created_at.isoformat(),
+            "match_comment": ms.match_comment,
+            "my_score":      ms.my_score,
+            "opp_score":     ms.opp_score,
+            "created_at":    ms.created_at.isoformat(),
         }
         for ms in sessions
     ]
+
+
+@app.get("/combined_heatmap")
+async def combined_heatmap(sessions: str):
+    """
+    Accepts comma-separated session_ids, loads all positions.json files,
+    combines them, and returns a single heatmap PNG in memory.
+    """
+    import json as _json
+    import io
+    import numpy as np
+    from fastapi.responses import Response as _Response
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    session_ids = [s.strip() for s in sessions.split(",") if s.strip()]
+    if not session_ids:
+        raise HTTPException(status_code=422, detail="sessions parameter required")
+
+    all_pts: list[tuple[int, int]] = []
+    for sid in session_ids:
+        path = os.path.join("data", "results", sid, "positions.json")
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            positions = _json.load(f)
+        for p in positions:
+            cx, cy = p.get("cx"), p.get("cy")
+            if cx is not None and cy is not None:
+                all_pts.append((int(cx), int(cy)))
+
+    if not all_pts:
+        raise HTTPException(status_code=404, detail="No position data found")
+
+    CW, CH = court_tracker.COURT_W, court_tracker.COURT_H
+    grid = np.zeros((CH, CW), dtype=np.float32)
+    for x, y in all_pts:
+        grid[int(np.clip(y, 0, CH - 1)), int(np.clip(x, 0, CW - 1))] += 1
+
+    if grid.max() > 0:
+        sigma = 18
+        ksize = int(sigma * 6) | 1
+        grid = cv2.GaussianBlur(grid, (ksize, ksize), sigma)
+
+    court_rgb = cv2.cvtColor(court_tracker._draw_court(CW, CH), cv2.COLOR_BGR2RGB)
+    fig = Figure(figsize=(CW / 100, CH / 100), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(court_rgb, extent=[0, CW, CH, 0], aspect="auto")
+    if grid.max() > 0:
+        ax.imshow(grid, extent=[0, CW, CH, 0], cmap="YlOrRd", alpha=0.75,
+                  vmin=0, vmax=grid.max(), aspect="auto", interpolation="bilinear")
+    ax.set_xlim(0, CW)
+    ax.set_ylim(CH, 0)
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", pad_inches=0, facecolor="#111111")
+    buf.seek(0)
+    return _Response(content=buf.read(), media_type="image/png")
+
+
+@app.post("/opponent_coaching")
+async def get_opponent_coaching(body: dict):
+    try:
+        feedback = await asyncio.to_thread(gemini.get_opponent_coaching, body)
+    except Exception as exc:
+        err = str(exc)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            raise HTTPException(status_code=429, detail="quota_exceeded")
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+    if feedback is None:
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+    return {"feedback": feedback}
 
 
 @app.post("/users", response_model=UserRead)

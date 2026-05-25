@@ -15,6 +15,7 @@ function formatDate(iso) {
 
 function MatchHistory() {
   const navigate = useNavigate();
+  const preferredSport = localStorage.getItem('preferred_sport');
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -28,7 +29,13 @@ function MatchHistory() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => { setMatches(data); setLoading(false); })
+      .then(data => {
+        const filtered = preferredSport
+          ? data.filter(m => m.sport_type === preferredSport)
+          : data;
+        setMatches(filtered);
+        setLoading(false);
+      })
       .catch(() => { setError('Failed to load history.'); setLoading(false); });
   }, []);
 
@@ -68,7 +75,7 @@ function MatchHistory() {
           ‹
         </button>
         <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
-          Match History
+          {preferredSport === 'tennis_serve' ? 'Tennis' : 'Badminton'} History
         </span>
       </div>
 
