@@ -360,14 +360,16 @@ def generate_debug_overlay(
     keypoints_list: list,
     fps: float,
     session_id: str,
-    shot_frames: set | None = None,
 ) -> str:
     """
-    Render the original video (at sampled FPS) with tracked keypoints overlaid:
-      - Green filled circle  : ankle midpoint  (turns red on shot frames)
-      - Cyan  filled circle  : right wrist
+    Render the original video (at sampled FPS) with raw pose detection overlaid:
+      - Orange circle : right ankle
+      - Blue circle   : left ankle
+      - Green circle  : ankle midpoint (tracking point used for heatmap)
+    Shows pre-filter detections so pose estimation issues are visible.
     """
     results_dir = os.path.join("data", "results", session_id)
+    os.makedirs(results_dir, exist_ok=True)
     out_path    = os.path.join(results_dir, "debug.mp4")
 
     cap     = cv2.VideoCapture(video_path)
@@ -380,13 +382,6 @@ def generate_debug_overlay(
 
     frame_to_pos = {p["frame"]: p for p in positions if p is not None}
 
-    shot_set: set[int] = set()
-    if shot_frames:
-        window = MOVEMENT_STRIDE * 3
-        for sf in shot_frames:
-            for d in range(-window, window + 1):
-                shot_set.add(sf + d)
-
     frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
@@ -394,24 +389,31 @@ def generate_debug_overlay(
             break
 
         if frame_idx % MOVEMENT_STRIDE == 0:
+            kp = keypoints_list[frame_idx] if frame_idx < len(keypoints_list) else {}
+
+            # Right ankle — orange
+            if kp and kp.get("right_ankle"):
+                ra = kp["right_ankle"]
+                rx, ry = int(ra["x"] * vid_w), int(ra["y"] * vid_h)
+                cv2.circle(frame, (rx, ry), 14, (0, 140, 255), -1)
+                cv2.circle(frame, (rx, ry), 16, (255, 255, 255), 2)
+                cv2.putText(frame, "R", (rx - 5, ry + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+            # Left ankle — blue
+            if kp and kp.get("left_ankle"):
+                la = kp["left_ankle"]
+                lx, ly = int(la["x"] * vid_w), int(la["y"] * vid_h)
+                cv2.circle(frame, (lx, ly), 14, (255, 100, 0), -1)
+                cv2.circle(frame, (lx, ly), 16, (255, 255, 255), 2)
+                cv2.putText(frame, "L", (lx - 5, ly + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+            # Midpoint — green (the point actually used for tracking)
             pos = frame_to_pos.get(frame_idx)
-            kp  = keypoints_list[frame_idx] if frame_idx < len(keypoints_list) else {}
-
             if pos:
-                ax, ay   = int(pos["x"] * vid_w), int(pos["y"] * vid_h)
-                is_shot  = frame_idx in shot_set
-                a_color  = (0, 0, 255) if is_shot else (0, 255, 0)
-                cv2.circle(frame, (ax, ay), 16, a_color, -1)
-                cv2.circle(frame, (ax, ay), 18, (255, 255, 255), 2)
-                if is_shot:
-                    cv2.putText(frame, "SHOT", (ax + 22, ay - 12),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-            if kp and kp.get("right_wrist"):
-                wr = kp["right_wrist"]
-                wx, wy = int(wr["x"] * vid_w), int(wr["y"] * vid_h)
-                cv2.circle(frame, (wx, wy), 10, (0, 255, 255), -1)
-                cv2.circle(frame, (wx, wy), 12, (255, 255, 255), 1)
+                mx, my = int(pos["x"] * vid_w), int(pos["y"] * vid_h)
+                cv2.circle(frame, (mx, my), 8, (87, 255, 200), -1)
 
             writer.write(frame)
 
@@ -783,8 +785,12 @@ def run_court_analysis(video_path: str, court_corners: list[dict], progress_cb=N
 
     H = _build_homography(court_corners, video_w, video_h)
 
+    # Debug overlay uses raw positions (pre-filter) to expose pose estimation issues
+    _p(46, "Generating debug overlay…")
+    generate_debug_overlay(video_path, positions, keypoints_list, fps, session_id)
+
     t1 = time.perf_counter()
-    _p(46, "Filtering detections…")
+    _p(47, "Filtering detections…")
     positions = _invalidate_out_of_bounds(positions, H, video_w, video_h)
     positions = _smooth_positions(positions)
     shot_frames = detect_shots_by_wrist_speed(keypoints_list, fps)
