@@ -41,6 +41,7 @@ from backend.schemas import (
 )
 from backend import pipeline, vlm, db, vector_db
 from backend.upload_validation import validate_upload_metadata, validate_video_duration, MAX_BYTES
+from backend.adaptive import get_recurring_issues
 from ml import renderer
 
 logger = logging.getLogger(__name__)
@@ -278,8 +279,11 @@ async def analyse(
     )
     rag_context = "\n---\n".join(r["matched_chunk"] for r in similar)
 
+    recurring = get_recurring_issues(user_id, sport_type, sqlite_db) if user_id else []
+
     coaching = await asyncio.to_thread(
-        gemini.get_coaching, result["deviation_scores"], actual_video_path, skill_level, sport_type, rag_context,
+        gemini.get_coaching, result["deviation_scores"], actual_video_path,
+        skill_level, sport_type, rag_context, recurring,
     )
 
     highlight_applied = False
@@ -335,6 +339,9 @@ async def analyse(
             user_id=user_id,
         )
         await asyncio.to_thread(vector_db.save_vlm_vector_db)
+
+    if coaching and recurring:
+        coaching["recurring_issues"] = recurring
 
     return AnalyseResponse(
         session_id=result["session_id"], deviation_scores=result["deviation_scores"],

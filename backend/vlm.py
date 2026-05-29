@@ -143,7 +143,8 @@ class gemini_model:
     def get_coaching(self, deviation_scores: dict, video_path: str,
                      skill_level: str = "intermediate",
                      sport_type: str = "badminton",
-                     context: str = "") -> dict | None:
+                     context: str = "",
+                     recurring_issues: list | None = None) -> dict | None:
 
         checkpoints = deviation_scores.get("checkpoints", {})
 
@@ -165,6 +166,13 @@ class gemini_model:
             patterns = self._TENNIS_SERVE_PATTERNS
 
         context_section = f"\nPAST SESSION CONTEXT (from similar sessions — reference only if relevant):\n{context}\n" if context else ""
+        recurring_section = ""
+        if recurring_issues:
+            joints_str = ", ".join(r.replace("_", " ") for r in recurring_issues)
+            recurring_section = (
+                f"\nRECURRING ISSUES (these joints have been flagged across multiple past sessions — "
+                f"escalate your feedback for them and suggest a specific drill): {joints_str}\n"
+            )
 
         prompt = f"""You are an expert {sport_label} coach. The player's skill level is: {skill_level}.
 
@@ -174,7 +182,7 @@ Look at the player's actual movement. Trust what you see. Your visual observatio
 STEP 2 — SUPPLEMENTARY DATA (use only to confirm or add nuance to what you observed — do not let numbers override your visual judgment):
 {checkpoint_data}
 (severity_score: 0.0 = no deviation, 1.0 = maximum deviation from reference — treat as a rough hint, not a verdict)
-{context_section}
+{context_section}{recurring_section}
 STEP 3 — IDENTIFY THE ROOT CAUSE using these common beginner mistake patterns:
 {patterns}
 
