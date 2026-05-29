@@ -93,7 +93,7 @@ def classify_shots_from_video(
 
     RIGHT_WRIST_IDX = 16  # MediaPipe pose landmark index for right_wrist
 
-    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task")
+    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task", delegate=python.BaseOptions.Delegate.CPU)
     options = vision.PoseLandmarkerOptions(
         base_options=base_options,
         running_mode=vision.RunningMode.IMAGE,
@@ -254,7 +254,7 @@ def extract_keypoints_strided(video_path: str, stride: int = SAMPLE_STRIDE) -> t
     total      = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
-    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task")
+    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task", delegate=python.BaseOptions.Delegate.CPU)
     options = vision.PoseLandmarkerOptions(
         base_options=base_options,
         running_mode=vision.RunningMode.VIDEO,

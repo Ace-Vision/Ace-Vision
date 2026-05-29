@@ -34,7 +34,7 @@ def extract_keypoints(video_path: str) -> list[dict]:
                     and values as dicts with 'x', 'y', 'z', 'visibility'.
                     Empty dict for frames where no pose was detected.
     """
-    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task")
+    base_options = python.BaseOptions(model_asset_path="models/pose_landmarker.task", delegate=python.BaseOptions.Delegate.CPU)
     options = vision.PoseLandmarkerOptions(
         base_options=base_options,
         running_mode=vision.RunningMode.VIDEO,

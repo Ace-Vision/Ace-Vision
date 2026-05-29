@@ -2,7 +2,7 @@ services:
   - type: web
     name: ace-vision-backend
     runtime: python
-    buildCommand: apt-get install -y libgles2 libgl1 && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
@@ -11,6 +11,12 @@ services:
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
+      - key: DISPLAY
+        value: ":99"
+      - key: MPLBACKEND
+        value: "Agg"
+      - key: MEDIAPIPE_DISABLE_GPU
+        value: "1"
 
 databases:
   - name: ace-vision-db
