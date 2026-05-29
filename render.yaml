@@ -2,8 +2,8 @@ services:
   - type: web
     name: ace-vision-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt && python -c "import ctypes.util, os, subprocess; subprocess.run(['gcc','-shared','-fPIC','-o','/opt/render/project/src/libGLESv2.so.2','-x','c','/dev/null'],check=False)"
-    startCommand: LD_LIBRARY_PATH=/opt/render/project/src:$LD_LIBRARY_PATH uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
     envVars:
       - key: DATABASE_URL
         fromDatabase:
