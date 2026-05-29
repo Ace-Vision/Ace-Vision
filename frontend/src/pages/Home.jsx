@@ -115,7 +115,7 @@ function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState(null);
   const [pendingFile, setPendingFile] = useState(null);
-  const [courtCorners, setCourtCorners] = useState(null);
+  const [, setCourtCorners] = useState(null);
   const [opponentName, setOpponentName] = useState('');
   const [matchComment, setMatchComment] = useState('');
   const [finalMyScore,  setFinalMyScore]  = useState('');

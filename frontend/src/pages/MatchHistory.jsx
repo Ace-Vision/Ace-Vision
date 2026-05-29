@@ -37,7 +37,7 @@ function MatchHistory() {
         setLoading(false);
       })
       .catch(() => { setError('Failed to load history.'); setLoading(false); });
-  }, []);
+  }, [preferredSport]);
 
   async function openMatch(session_id) {
     setOpening(session_id);
