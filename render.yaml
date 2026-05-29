@@ -2,7 +2,11 @@ services:
   - type: web
     name: ace-vision-backend
     runtime: python
-    buildCommand: apt-get install -y libgles2 libgl1 && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
+    nativePackages:
+      - libgles2-mesa
+      - libgl1-mesa-glx
+      - libglib2.0-0
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
