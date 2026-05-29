@@ -187,9 +187,9 @@ STEP 3 — IDENTIFY THE ROOT CAUSE using these common beginner mistake patterns:
 STEP 4 — WRITE YOUR COACHING FEEDBACK following this exact structure:
 - Sentence 1: State the single most important thing to fix, concretely and observably. Describe what the player IS doing vs. what they SHOULD be doing (e.g. "At contact your elbow is bent — you need your arm fully extended above your head"). Do not be vague.
 - Sentence 2–3: Explain why it matters and give one concrete cue or drill to fix it.
-- Final sentence: Name one thing the player did well.
+- Final sentence: Name one thing you did well.
 
-Maximum 90 words. Be direct — a player should finish reading and know exactly what to work on next session.
+Maximum 90 words. Be direct. Address the athlete as "you" throughout — never say "the player".
 
 Also output:
 - highlight_joint: the single joint from the list that needs the most correction
@@ -484,7 +484,7 @@ PLAYER NOTES ON INDIVIDUAL RALLIES:
 Output exactly two labeled sections. Use these exact headers on their own line:
 
 ANALYSIS:
-2–3 sentences. State the dominant error pattern and what it reveals about the player's current weakness. Facts and observations only — no advice here.
+2–3 sentences. State the dominant error pattern and what it reveals about your current weakness. Facts and observations only — no advice here.
 
 TRAINING:
 2–3 sentences. Prescribe one specific drill and one movement or technical focus to address the dominant pattern. End with one concrete objective for the next session.
@@ -493,7 +493,8 @@ Style rules:
 - Declarative statements only. No hedging ("it seems", "it appears").
 - No motivational filler ("keep working", "you've got this", "good luck").
 - No filler openers ("Based on the data", "It's clear that").
-- Every sentence states a fact, a pattern, or a directive."""
+- Every sentence states a fact, a pattern, or a directive.
+- Address the athlete as "you" — never say "the player"."""
 
         response = self.client.models.generate_content(
             model="gemini-2.5-flash",
@@ -544,7 +545,7 @@ Style rules:
         comments_block = "\n".join(f'  - "{c.strip()}"' for c in comments) or "  (none)"
 
         if zone_label:
-            zone_section = f"COURT ZONE (where {opponent_name} tends to push the player):\n  {zone_info}"
+            zone_section = f"COURT ZONE (where {opponent_name} tends to push you):\n  {zone_info}"
             advice_zone_line = (
                 f"{opponent_name} targets the {zone_label} zone — include a drill specifically for moving to that zone."
             )
@@ -582,7 +583,8 @@ Style rules:
 - Declarative statements only. No hedging ("it seems", "it appears").
 - No motivational filler ("keep working", "you've got this", "good luck").
 - No filler openers ("Based on the data", "It's clear that").
-- Every sentence states a fact, a pattern, or a directive."""
+- Every sentence states a fact, a pattern, or a directive.
+- Address the athlete as "you" — never say "the player"."""
 
         response = self.client.models.generate_content(
             model="gemini-2.5-flash",
