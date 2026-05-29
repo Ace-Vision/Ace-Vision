@@ -219,10 +219,8 @@ def _invalidate_out_of_bounds(
     positions: list, H: np.ndarray, video_w: int, video_h: int
 ) -> list:
     """
-    Filter out opponent detections (y < -COURT_MARGIN after transform = beyond net).
-    Side/bottom bounds are not checked because corners may be set outside the video
-    frame, in which case player positions legitimately map beyond COURT_W/COURT_H.
-    _transform_point clips to court bounds for rendering.
+    Mark positions that transform outside the court as None.
+    Any detection with a transformed y < 0 (beyond the net) is the opponent.
     """
     result = []
     for p in positions:
@@ -232,8 +230,11 @@ def _invalidate_out_of_bounds(
         src = np.float32([[[p["x"] * video_w, p["y"] * video_h]]])
         dst = cv2.perspectiveTransform(src, H)
         x, y = dst[0][0]
-        # Only drop detections that are clearly beyond the net (opponent side)
-        in_bounds = np.isfinite(x) and np.isfinite(y) and y >= -COURT_MARGIN
+        in_bounds = (
+            np.isfinite(x) and np.isfinite(y)
+            and -COURT_MARGIN <= x <= COURT_W + COURT_MARGIN
+            and -COURT_MARGIN <= y <= COURT_H + COURT_MARGIN
+        )
         result.append(p if in_bounds else None)
     invalidated = sum(1 for a, b in zip(positions, result) if a is not None and b is None)
     print(f"[filter] invalidated {invalidated} out-of-bounds detections")
@@ -339,7 +340,7 @@ def _build_homography(corners: list[dict], video_w: int, video_h: int) -> np.nda
     return cv2.getPerspectiveTransform(src, dst)
 
 
-def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int, clip: bool = True) -> tuple[int, int] | None:
+def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int) -> tuple[int, int] | None:
     if pt is None:
         return None
     src = np.float32([[[pt["x"] * video_w, pt["y"] * video_h]]])
@@ -347,9 +348,7 @@ def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int, clip: 
     x, y = dst[0][0]
     if not (np.isfinite(x) and np.isfinite(y)):
         return None
-    if clip:
-        return int(round(np.clip(x, 0, COURT_W))), int(round(np.clip(y, 0, COURT_H)))
-    return int(round(x)), int(round(y))
+    return int(round(np.clip(x, 0, COURT_W))), int(round(np.clip(y + COURT_H / 3, 0, COURT_H)))
 
 
 # ── Debug overlay video ───────────────────────────────────────────────────────
@@ -360,16 +359,14 @@ def generate_debug_overlay(
     keypoints_list: list,
     fps: float,
     session_id: str,
+    shot_frames: set | None = None,
 ) -> str:
     """
-    Render the original video (at sampled FPS) with raw pose detection overlaid:
-      - Orange circle : right ankle
-      - Blue circle   : left ankle
-      - Green circle  : ankle midpoint (tracking point used for heatmap)
-    Shows pre-filter detections so pose estimation issues are visible.
+    Render the original video (at sampled FPS) with tracked keypoints overlaid:
+      - Green filled circle  : ankle midpoint  (turns red on shot frames)
+      - Cyan  filled circle  : right wrist
     """
     results_dir = os.path.join("data", "results", session_id)
-    os.makedirs(results_dir, exist_ok=True)
     out_path    = os.path.join(results_dir, "debug.mp4")
 
     cap     = cv2.VideoCapture(video_path)
@@ -382,6 +379,13 @@ def generate_debug_overlay(
 
     frame_to_pos = {p["frame"]: p for p in positions if p is not None}
 
+    shot_set: set[int] = set()
+    if shot_frames:
+        window = MOVEMENT_STRIDE * 3
+        for sf in shot_frames:
+            for d in range(-window, window + 1):
+                shot_set.add(sf + d)
+
     frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
@@ -389,31 +393,24 @@ def generate_debug_overlay(
             break
 
         if frame_idx % MOVEMENT_STRIDE == 0:
-            kp = keypoints_list[frame_idx] if frame_idx < len(keypoints_list) else {}
-
-            # Right ankle — orange
-            if kp and kp.get("right_ankle"):
-                ra = kp["right_ankle"]
-                rx, ry = int(ra["x"] * vid_w), int(ra["y"] * vid_h)
-                cv2.circle(frame, (rx, ry), 14, (0, 140, 255), -1)
-                cv2.circle(frame, (rx, ry), 16, (255, 255, 255), 2)
-                cv2.putText(frame, "R", (rx - 5, ry + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
-            # Left ankle — blue
-            if kp and kp.get("left_ankle"):
-                la = kp["left_ankle"]
-                lx, ly = int(la["x"] * vid_w), int(la["y"] * vid_h)
-                cv2.circle(frame, (lx, ly), 14, (255, 100, 0), -1)
-                cv2.circle(frame, (lx, ly), 16, (255, 255, 255), 2)
-                cv2.putText(frame, "L", (lx - 5, ly + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
-            # Midpoint — green (the point actually used for tracking)
             pos = frame_to_pos.get(frame_idx)
+            kp  = keypoints_list[frame_idx] if frame_idx < len(keypoints_list) else {}
+
             if pos:
-                mx, my = int(pos["x"] * vid_w), int(pos["y"] * vid_h)
-                cv2.circle(frame, (mx, my), 8, (87, 255, 200), -1)
+                ax, ay   = int(pos["x"] * vid_w), int(pos["y"] * vid_h)
+                is_shot  = frame_idx in shot_set
+                a_color  = (0, 0, 255) if is_shot else (0, 255, 0)
+                cv2.circle(frame, (ax, ay), 16, a_color, -1)
+                cv2.circle(frame, (ax, ay), 18, (255, 255, 255), 2)
+                if is_shot:
+                    cv2.putText(frame, "SHOT", (ax + 22, ay - 12),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            if kp and kp.get("right_wrist"):
+                wr = kp["right_wrist"]
+                wx, wy = int(wr["x"] * vid_w), int(wr["y"] * vid_h)
+                cv2.circle(frame, (wx, wy), 10, (0, 255, 255), -1)
+                cv2.circle(frame, (wx, wy), 12, (255, 255, 255), 1)
 
             writer.write(frame)
 
@@ -785,12 +782,8 @@ def run_court_analysis(video_path: str, court_corners: list[dict], progress_cb=N
 
     H = _build_homography(court_corners, video_w, video_h)
 
-    # Debug overlay uses raw positions (pre-filter) to expose pose estimation issues
-    _p(46, "Generating debug overlay…")
-    generate_debug_overlay(video_path, positions, keypoints_list, fps, session_id)
-
     t1 = time.perf_counter()
-    _p(47, "Filtering detections…")
+    _p(46, "Filtering detections…")
     positions = _invalidate_out_of_bounds(positions, H, video_w, video_h)
     positions = _smooth_positions(positions)
     shot_frames = detect_shots_by_wrist_speed(keypoints_list, fps)
@@ -808,7 +801,7 @@ def run_court_analysis(video_path: str, court_corners: list[dict], progress_cb=N
     for p in positions:
         if p is None:
             continue
-        xy = _transform_point(p, H, video_w, video_h, clip=False)
+        xy = _transform_point(p, H, video_w, video_h)
         if xy is not None:
             court_pts_export.append({
                 "time_s": round(p["time_s"], 3),

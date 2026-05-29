@@ -753,4 +753,7 @@ def get_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
 if os.path.isdir(_FRONTEND_BUILD):
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
-        return FileResponse(os.path.join(_FRONTEND_BUILD, "index.html"))
+        return FileResponse(
+            os.path.join(_FRONTEND_BUILD, "index.html"),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )

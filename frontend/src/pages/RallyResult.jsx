@@ -82,16 +82,13 @@ function drawMinimap(canvas, positions, absoluteTime, startS, endS) {
     if (d < minDiff) { minDiff = d; curIdx = i; }
   }
 
-  const toX = cx => Math.max(pad, Math.min(pad + cw, pad + (cx / COURT_BW) * cw));
-  const toY = cy => Math.max(pad, Math.min(pad + ch, pad + (cy / COURT_BH) * ch));
-
   // Trail
   const trailStart = Math.max(0, curIdx - TRAIL_LEN);
   for (let i = trailStart; i < curIdx; i++) {
     const alpha = (i - trailStart + 1) / (curIdx - trailStart + 1);
     const p = pts[i];
-    const x = toX(p.cx);
-    const y = toY(p.cy);
+    const x = pad + (p.cx / COURT_BW) * cw;
+    const y = pad + (p.cy / COURT_BH) * ch;
     ctx.fillStyle = `rgba(200,255,87,${alpha * 0.35})`;
     ctx.beginPath();
     ctx.arc(x, y, Math.max(1.5, 3 * alpha), 0, Math.PI * 2);
@@ -100,8 +97,8 @@ function drawMinimap(canvas, positions, absoluteTime, startS, endS) {
 
   // Current dot
   const cur = pts[curIdx];
-  const dx = toX(cur.cx);
-  const dy = toY(cur.cy);
+  const dx = pad + (cur.cx / COURT_BW) * cw;
+  const dy = pad + (cur.cy / COURT_BH) * ch;
 
   ctx.fillStyle = 'rgba(200,255,87,0.18)';
   ctx.beginPath();

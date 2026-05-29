@@ -623,8 +623,14 @@ function Home() {
         </button>
 
         <p
-          className="text-center text-[11px] text-white/15 mt-1 animate-fade-up-slow"
-          style={{ animationDelay: '0.5s' }}
+          className="text-center text-[12px] font-medium mt-1 animate-fade-up-slow"
+          style={{ animationDelay: '0.5s', lineHeight: '1.6', color: '#C8FF57' }}
+        >
+          Film from directly behind yourself so your entire half of the court is visible.
+        </p>
+        <p
+          className="text-center text-[11px] text-white/15 animate-fade-up-slow"
+          style={{ animationDelay: '0.6s' }}
         >
           MP4 · MOV · Max 200MB
         </p>

@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 
+// Extra draggable zone beyond the video edge (in % of video dimensions)
+const PAD = 80;
+
 export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
-  const wrapperRef = useRef(null); // inner div wrapping video + SVG (drag coords are relative to this)
+  const wrapperRef = useRef(null);
   const videoRef   = useRef(null);
 
   const [videoUrl,   setVideoUrl]   = useState(null);
@@ -23,7 +26,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
     return () => { URL.revokeObjectURL(url); setVideoUrl(null); };
   }, [videoFile]);
 
-  // Global drag/touch handlers — coords relative to wrapperRef (the video overlay div)
+  // Global drag/touch handlers — coords relative to wrapperRef (video div)
   useEffect(() => {
     if (dragging === null) return;
 
@@ -31,9 +34,10 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
       const rect = wrapperRef.current.getBoundingClientRect();
       const cx = e.touches ? e.touches[0].clientX : e.clientX;
       const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      // Allow corners to go up to PAD% outside the video frame
       return {
-        x: ((cx - rect.left)  / rect.width)  * 100,
-        y: ((cy - rect.top)   / rect.height) * 100,
+        x: Math.max(-PAD, Math.min(100 + PAD, ((cx - rect.left)  / rect.width)  * 100)),
+        y: Math.max(-PAD, Math.min(100 + PAD, ((cy - rect.top)   / rect.height) * 100)),
       };
     };
 
@@ -63,21 +67,34 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
 
   const polyPoints = corners.map(c => `${c.x},${c.y}`).join(' ');
 
-  // Portrait: constrain by height, auto width, centered.
-  // Landscape: fill container width.
   const videoStyle = isPortrait
-    ? { display: 'block', borderRadius: 16, maxHeight: '41dvh', width: 'auto' }
+    ? { display: 'block', borderRadius: 16, maxHeight: '62dvh', width: 'auto' }
     : { display: 'block', borderRadius: 16, width: '100%' };
 
   const wrapperStyle = {
     position: 'relative',
     display:  'inline-block',
-    // landscape: fill the flex container; portrait: shrink to video width
-    width: isPortrait ? 'auto' : '66%',
+    width:    isPortrait ? 'auto' : '100%',
+    overflow: 'visible',
   };
 
+  // SVG extends PAD% beyond the video in all directions so corner dots
+  // remain interactive even when dragged outside the video frame.
+  const svgStyle = {
+    position: 'absolute',
+    left:     `${-PAD}%`,
+    top:      `${-PAD}%`,
+    width:    `${100 + 2 * PAD}%`,
+    height:   `${100 + 2 * PAD}%`,
+    overflow: 'visible',
+    pointerEvents: 'none', // only the corner <g> elements capture events
+  };
+
+  const viewBox = `${-PAD} ${-PAD} ${100 + 2 * PAD} ${100 + 2 * PAD}`;
+
   return (
-    <div className="min-h-screen bg-black flex flex-col">
+    <div className="bg-black" style={{ position: 'fixed', inset: 0, zIndex: 100, paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)', display: 'flex', justifyContent: 'center' }}>
+      <div className="flex flex-col w-full" style={{ maxWidth: 430 }}>
       <div className="px-5 pt-14 pb-4 flex items-center gap-3 flex-shrink-0">
         <button
           onClick={onBack}
@@ -94,8 +111,8 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
         Drag the 4 corners to mark <span className="text-white/60">your half</span> of the court — net side at top, baseline at bottom
       </p>
 
-      {/* Centering flex row — portrait centers horizontally, landscape fills */}
-      <div className="flex justify-center px-5 flex-1 min-h-0">
+      {/* Centering flex row */}
+      <div className="flex justify-center px-5 flex-1 min-h-0" style={{ overflow: 'visible' }}>
         <div ref={wrapperRef} style={wrapperStyle}>
           {videoUrl && (
             <video
@@ -124,11 +141,19 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
 
           {ready && (
             <svg
-              className="absolute inset-0 w-full h-full"
-              viewBox="0 0 100 100"
+              style={svgStyle}
+              viewBox={viewBox}
               preserveAspectRatio="none"
-              style={{ overflow: 'visible' }}
             >
+              {/* Dashed border showing the extended drag zone */}
+              <rect
+                x={-PAD + 0.5} y={-PAD + 0.5}
+                width={100 + 2 * PAD - 1} height={100 + 2 * PAD - 1}
+                fill="transparent"
+                stroke="rgba(255,255,255,0.07)"
+                strokeWidth="0.6"
+                strokeDasharray="2.5 2.5"
+              />
               <polygon
                 points={polyPoints}
                 fill="rgba(200,255,87,0.07)"
@@ -140,7 +165,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
                   key={i}
                   onMouseDown={(e) => { e.stopPropagation(); setDragging(i); }}
                   onTouchStart={(e) => { e.stopPropagation(); setDragging(i); }}
-                  style={{ cursor: dragging === i ? 'grabbing' : 'grab' }}
+                  style={{ cursor: dragging === i ? 'grabbing' : 'grab', pointerEvents: 'all' }}
                 >
                   <circle cx={c.x} cy={c.y} r={6} fill="transparent" />
                   <circle
@@ -157,7 +182,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
       </div>
 
       <p className="mt-3 text-[11px] text-white/20 text-center flex-shrink-0">
-        Tap and drag each corner
+        Corner off-screen? Drag beyond the video edge
       </p>
 
       <div className="px-5 mt-5 pb-10 flex-shrink-0">
@@ -169,6 +194,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
         >
           Start Analysis
         </button>
+      </div>
       </div>
     </div>
   );

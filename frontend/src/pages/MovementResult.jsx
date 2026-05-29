@@ -595,27 +595,6 @@ function MovementResult() {
             </div>
           )}
 
-          {/* Debug: pose estimation overlay */}
-          <div className="animate-fade-up space-y-3">
-            <div>
-              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
-                Pose Debug
-              </p>
-              <p className="text-xs text-white/40 leading-relaxed">
-                🟠 Right ankle &nbsp;🔵 Left ankle &nbsp;🟢 Tracking point
-              </p>
-            </div>
-            <div className="rounded-xl overflow-hidden bg-[#111] border border-white/[0.06]">
-              <video
-                src={`${API_BASE}/debug/${session_id}`}
-                controls
-                playsInline
-                className="w-full block"
-                style={{ maxHeight: 280 }}
-              />
-            </div>
-          </div>
-
           {/* Fresh flow: start rally analysis from heatmaps page */}
           {!locked && (
             <button
