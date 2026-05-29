@@ -534,10 +534,11 @@ function Home() {
         {/* Settings sheet */}
         {settingsOpen && (
           <div
-            className="fixed inset-0 z-50 flex flex-col justify-end"
+            className="fixed inset-0 z-50 flex justify-center items-end"
             style={{ background: 'rgba(0,0,0,0.65)' }}
             onClick={() => setSettingsOpen(false)}
           >
+            <div className="w-full max-w-[430px]" onClick={e => e.stopPropagation()}>
             <div
               className="rounded-t-3xl px-6 pt-5 pb-12"
               style={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)' }}
@@ -563,6 +564,7 @@ function Home() {
                   </button>
                 ))}
               </div>
+            </div>
             </div>
           </div>
         )}
