@@ -339,7 +339,7 @@ def _build_homography(corners: list[dict], video_w: int, video_h: int) -> np.nda
     return cv2.getPerspectiveTransform(src, dst)
 
 
-def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int) -> tuple[int, int] | None:
+def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int, clip: bool = True) -> tuple[int, int] | None:
     if pt is None:
         return None
     src = np.float32([[[pt["x"] * video_w, pt["y"] * video_h]]])
@@ -347,7 +347,9 @@ def _transform_point(pt: dict, H: np.ndarray, video_w: int, video_h: int) -> tup
     x, y = dst[0][0]
     if not (np.isfinite(x) and np.isfinite(y)):
         return None
-    return int(round(np.clip(x, 0, COURT_W))), int(round(np.clip(y, 0, COURT_H)))
+    if clip:
+        return int(round(np.clip(x, 0, COURT_W))), int(round(np.clip(y, 0, COURT_H)))
+    return int(round(x)), int(round(y))
 
 
 # ── Debug overlay video ───────────────────────────────────────────────────────
@@ -800,7 +802,7 @@ def run_court_analysis(video_path: str, court_corners: list[dict], progress_cb=N
     for p in positions:
         if p is None:
             continue
-        xy = _transform_point(p, H, video_w, video_h)
+        xy = _transform_point(p, H, video_w, video_h, clip=False)
         if xy is not None:
             court_pts_export.append({
                 "time_s": round(p["time_s"], 3),
