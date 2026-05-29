@@ -66,14 +66,14 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
   // Portrait: constrain by height, auto width, centered.
   // Landscape: fill container width.
   const videoStyle = isPortrait
-    ? { display: 'block', borderRadius: 16, maxHeight: '62dvh', width: 'auto' }
+    ? { display: 'block', borderRadius: 16, maxHeight: '41dvh', width: 'auto' }
     : { display: 'block', borderRadius: 16, width: '100%' };
 
   const wrapperStyle = {
     position: 'relative',
     display:  'inline-block',
     // landscape: fill the flex container; portrait: shrink to video width
-    width: isPortrait ? 'auto' : '100%',
+    width: isPortrait ? 'auto' : '66%',
   };
 
   return (
