@@ -58,8 +58,9 @@ def ensure_libgles():
             return
 
     try:
-        # RTLD_LAZY so unresolved GL symbols don't fail until (never) called
-        ctypes.CDLL(_STUB_PATH, mode=ctypes.RTLD_GLOBAL | ctypes.RTLD_LAZY)
+        # RTLD_GLOBAL with default lazy binding: unresolved GL symbols
+        # are never bound because the CPU delegate never calls them
+        ctypes.CDLL(_STUB_PATH, mode=ctypes.RTLD_GLOBAL)
         os.environ["LD_LIBRARY_PATH"] = (
             tempfile.gettempdir() + ":" + os.environ.get("LD_LIBRARY_PATH", "")
         )
