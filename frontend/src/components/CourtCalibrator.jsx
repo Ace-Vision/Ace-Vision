@@ -32,8 +32,8 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
       const cx = e.touches ? e.touches[0].clientX : e.clientX;
       const cy = e.touches ? e.touches[0].clientY : e.clientY;
       return {
-        x: Math.max(0, Math.min(100, ((cx - rect.left)  / rect.width)  * 100)),
-        y: Math.max(0, Math.min(100, ((cy - rect.top)   / rect.height) * 100)),
+        x: ((cx - rect.left)  / rect.width)  * 100,
+        y: ((cy - rect.top)   / rect.height) * 100,
       };
     };
 
