@@ -141,7 +141,11 @@ function Home() {
 
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
+      const v = videoRef.current;
+      v.srcObject = streamRef.current;
+      // iOS Safari often needs an explicit play() after setting srcObject
+      const p = v.play();
+      if (p?.catch) p.catch(() => {});
     }
   }, [cameraOpen]);
 
@@ -255,12 +259,28 @@ function Home() {
 
   async function openCamera() {
     setError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('This browser does not support camera access, or the page is not served over HTTPS.');
+      return;
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      let stream;
+      try {
+        // Prefer the rear camera (mobile)
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      } catch {
+        // Fall back to any available camera (desktop webcam, front camera)
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
       streamRef.current = stream;
       setCameraOpen(true);
     } catch (err) {
-      setError('카메라 접근 오류: ' + err.message);
+      const msg = err?.name === 'NotAllowedError'
+        ? 'Camera permission was denied. Allow it in your browser settings and try again.'
+        : err?.name === 'NotFoundError'
+        ? 'No camera was found on this device.'
+        : 'Camera error: ' + (err?.message || err);
+      setError(msg);
     }
   }
 
