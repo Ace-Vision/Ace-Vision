@@ -219,8 +219,10 @@ def _invalidate_out_of_bounds(
     positions: list, H: np.ndarray, video_w: int, video_h: int
 ) -> list:
     """
-    Mark positions that transform outside the court as None.
-    Any detection with a transformed y < 0 (beyond the net) is the opponent.
+    Filter out opponent detections (y < -COURT_MARGIN after transform = beyond net).
+    Side/bottom bounds are not checked because corners may be set outside the video
+    frame, in which case player positions legitimately map beyond COURT_W/COURT_H.
+    _transform_point clips to court bounds for rendering.
     """
     result = []
     for p in positions:
@@ -230,11 +232,8 @@ def _invalidate_out_of_bounds(
         src = np.float32([[[p["x"] * video_w, p["y"] * video_h]]])
         dst = cv2.perspectiveTransform(src, H)
         x, y = dst[0][0]
-        in_bounds = (
-            np.isfinite(x) and np.isfinite(y)
-            and -COURT_MARGIN <= x <= COURT_W + COURT_MARGIN
-            and -COURT_MARGIN <= y <= COURT_H + COURT_MARGIN
-        )
+        # Only drop detections that are clearly beyond the net (opponent side)
+        in_bounds = np.isfinite(x) and np.isfinite(y) and y >= -COURT_MARGIN
         result.append(p if in_bounds else None)
     invalidated = sum(1 for a, b in zip(positions, result) if a is not None and b is None)
     print(f"[filter] invalidated {invalidated} out-of-bounds detections")
