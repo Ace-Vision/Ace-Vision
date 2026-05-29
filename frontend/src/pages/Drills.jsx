@@ -31,7 +31,7 @@ function Drills() {
     <div className="min-h-screen bg-[#0a0a0a] pb-28">
 
       <div className="px-5 pt-16 pb-7">
-        <p className="text-[11px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
+        <p className="text-[13px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
         <h1 className="text-3xl font-bold text-white">Drills.</h1>
       </div>
 
@@ -57,14 +57,14 @@ function Drills() {
           <div key={d.id} className="card-sm px-4 py-4 hover:bg-[#161616] transition-colors cursor-pointer">
             <div className="flex items-start justify-between gap-3 mb-1.5">
               <p className="text-sm font-bold text-white">{d.title}</p>
-              <span className={`text-[10px] font-bold uppercase tracking-wider shrink-0 mt-0.5 ${
+              <span className={`text-[12px] font-bold uppercase tracking-wider shrink-0 mt-0.5 ${
                 d.level === 'Beginner' ? 'text-[#C8FF57]' : 'text-amber-400'
               }`}>
                 {d.level}
               </span>
             </div>
             <p className="text-xs text-[#555] leading-relaxed mb-3">{d.desc}</p>
-            <p className="text-[10px] font-semibold text-[#333] uppercase tracking-wider">
+            <p className="text-[12px] font-semibold text-[#333] uppercase tracking-wider">
               {d.sport} · {d.duration}
             </p>
           </div>

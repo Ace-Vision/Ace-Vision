@@ -446,10 +446,18 @@ If fewer than 2 clips show a clear overhead, set advice to "Not enough clear ove
         loss_tags     = session_data.get("loss_tags", {})
         rally_notes   = session_data.get("rally_notes", {})
 
-        swing_miss   = sum(1 for v in loss_tags.values() if v == "swing_miss")
-        bad_footwork = sum(1 for v in loss_tags.values() if v == "bad_footwork")
-        other_tag    = sum(1 for v in loss_tags.values() if v == "other")
-        untagged     = max(0, opp_wins - swing_miss - bad_footwork - other_tag)
+        tag_counts = {}
+        for v in loss_tags.values():
+            tag_counts[v] = tag_counts.get(v, 0) + 1
+        tagged_total = sum(tag_counts.values())
+        untagged     = max(0, opp_wins - tagged_total)
+
+        loss_block = "\n".join(
+            f"  {tag.replace('_', ' ').title()}: {cnt}"
+            for tag, cnt in sorted(tag_counts.items(), key=lambda x: -x[1])
+        ) or "  (none tagged)"
+        if untagged:
+            loss_block += f"\n  Untagged: {untagged}"
 
         notes_lines = [
             f"  Rally {int(i)+1}: {n.strip()}"
@@ -460,7 +468,7 @@ If fewer than 2 clips show a clear overhead, set advice to "Not enough clear ove
 
         sport_label = "badminton" if sport_type == "badminton" else "tennis"
 
-        prompt = f"""You are an expert {sport_label} coach reviewing a match.
+        prompt = f"""You are an expert {sport_label} coach reviewing a completed match.
 
 MATCH RESULT:
   Score: {user_wins} wins – {opp_wins} losses ({total} rallies total)
@@ -468,27 +476,42 @@ MATCH RESULT:
 {"  Player's own thoughts: " + match_comment if match_comment else ""}
 
 LOSS BREAKDOWN ({opp_wins} points lost):
-  Swing miss:    {swing_miss}
-  Bad footwork:  {bad_footwork}
-  Other:         {other_tag}
-  Untagged:      {untagged}
+{loss_block}
 
 PLAYER NOTES ON INDIVIDUAL RALLIES:
 {notes_block}
 
-Write coaching feedback that will genuinely help this player grow. Follow this structure exactly:
-- Paragraph 1 (2–3 sentences): Name the single most important pattern from the loss data. Be specific — what is the player doing wrong and why does it cost them points?
-- Paragraph 2 (1–2 sentences): Give one concrete drill or cue to fix it.
-- Final sentence: Acknowledge one positive from the match, then set a clear goal for the next session.
+Output exactly two labeled sections. Use these exact headers on their own line:
 
-Be direct, warm, and specific. 100–140 words total. No bullet points."""
+ANALYSIS:
+2–3 sentences. State the dominant error pattern and what it reveals about the player's current weakness. Facts and observations only — no advice here.
+
+TRAINING:
+2–3 sentences. Prescribe one specific drill and one movement or technical focus to address the dominant pattern. End with one concrete objective for the next session.
+
+Style rules:
+- Declarative statements only. No hedging ("it seems", "it appears").
+- No motivational filler ("keep working", "you've got this", "good luck").
+- No filler openers ("Based on the data", "It's clear that").
+- Every sentence states a fact, a pattern, or a directive."""
 
         response = self.client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[prompt],
         )
-        text = (response.text or "").strip()
-        return text if text else None
+        raw = (response.text or "").strip()
+        if not raw:
+            return None
+
+        import re as _re
+        analysis_match = _re.search(r"ANALYSIS:\s*(.+?)(?=TRAINING:|$)", raw, _re.S)
+        training_match = _re.search(r"TRAINING:\s*(.+?)$", raw, _re.S)
+        analysis = analysis_match.group(1).strip() if analysis_match else ""
+        training = training_match.group(1).strip() if training_match else ""
+
+        if analysis and training:
+            return {"analysis": analysis, "training": training}
+        return {"analysis": raw, "training": ""}
 
     def get_opponent_coaching(self, data: dict) -> str | None:
         """
@@ -504,43 +527,82 @@ Be direct, warm, and specific. 100–140 words total. No bullet points."""
         total_losses   = data.get("total_losses", 0)
         mistake_counts = data.get("mistake_counts", {})
         zone_info      = (data.get("zone_description") or "").strip()
+        zone_label     = (data.get("zone_label") or "").strip()
         comments       = [c for c in (data.get("comments") or []) if c and c.strip()]
 
-        sport_label  = "badminton" if sport_type == "badminton" else "tennis"
-        swing_miss   = mistake_counts.get("swing_miss", 0)
-        bad_footwork = mistake_counts.get("bad_footwork", 0)
-        other        = mistake_counts.get("other", 0)
-        total_tagged = swing_miss + bad_footwork + other
+        sport_label   = "badminton" if sport_type == "badminton" else "tennis"
+        net_error     = mistake_counts.get("net_error", 0)
+        out_long      = mistake_counts.get("out_long", 0)
+        swing_miss    = mistake_counts.get("swing_miss", 0)
+        bad_footwork  = mistake_counts.get("bad_footwork", 0)
+        late_reaction = mistake_counts.get("late_reaction", 0)
+        weak_return   = mistake_counts.get("weak_return", 0)
+        serve_fault   = mistake_counts.get("serve_fault", 0)
+        forced_error  = mistake_counts.get("forced_error", 0)
+        total_tagged  = net_error + out_long + swing_miss + bad_footwork + late_reaction + weak_return + serve_fault + forced_error
 
         comments_block = "\n".join(f'  - "{c.strip()}"' for c in comments) or "  (none)"
-        zone_block     = zone_info if zone_info else "  No significant zone pattern detected."
 
-        prompt = f"""You are an expert {sport_label} coach preparing a player for their next match against a specific opponent.
+        if zone_label:
+            zone_section = f"COURT ZONE (where {opponent_name} tends to push the player):\n  {zone_info}"
+            advice_zone_line = (
+                f"{opponent_name} targets the {zone_label} zone — include a drill specifically for moving to that zone."
+            )
+        else:
+            zone_section = ""
+            advice_zone_line = ""
+
+        prompt = f"""You are an expert {sport_label} analyst writing a pre-match scouting report.
 
 OPPONENT: {opponent_name}
-HEAD-TO-HEAD RECORD: {total_wins}W – {total_losses}L across {total_matches} matches
+HEAD-TO-HEAD: {total_wins}W – {total_losses}L ({total_matches} matches)
 
-MISTAKES IN MATCHES AGAINST {opponent_name.upper()} ({total_tagged} tagged losses):
-  Swing miss:   {swing_miss}
-  Bad footwork: {bad_footwork}
-  Other:        {other}
-
-COURT ZONE PATTERN (where {opponent_name} tends to push the player):
-{zone_block}
-
-PLAYER'S NOTES FROM PAST MATCHES VS {opponent_name.upper()}:
+LOSS BREAKDOWN vs {opponent_name.upper()} ({total_tagged} tagged):
+  Net error:     {net_error}
+  Out / Long:    {out_long}
+  Swing miss:    {swing_miss}
+  Bad footwork:  {bad_footwork}
+  Late reaction: {late_reaction}
+  Weak return:   {weak_return}
+  Serve fault:   {serve_fault}
+  Forced error:  {forced_error}
+{zone_section}
+PLAYER'S MATCH NOTES:
 {comments_block}
 
-Write a targeted scouting report and tactical advice. Follow this structure exactly:
-- Paragraph 1 (2–3 sentences): Identify the main pattern {opponent_name} exploits, based on the mistake data and zone info. Be specific.
-- Paragraph 2 (1–2 sentences): Give one concrete tactical adjustment or drill to counter it.
-- Final sentence: Set a clear goal for the next match against {opponent_name}.
+Output exactly two labeled sections. Use these exact headers on their own line:
 
-Be direct, warm, and specific. 100–140 words total. No bullet points."""
+ANALYSIS:
+2–3 sentences. State the dominant error pattern and what tactical behaviour from {opponent_name} causes it. Facts only — no advice here.
+
+ADVICE:
+2–3 sentences. One concrete tactical adjustment and one specific drill or movement focus to address the dominant pattern. {advice_zone_line} End with one precise match objective.
+
+Style rules:
+- Declarative statements only. No hedging ("it seems", "it appears").
+- No motivational filler ("keep working", "you've got this", "good luck").
+- No filler openers ("Based on the data", "It's clear that").
+- Every sentence states a fact, a pattern, or a directive."""
 
         response = self.client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[prompt],
         )
-        text = (response.text or "").strip()
-        return text if text else None
+        raw = (response.text or "").strip()
+        if not raw:
+            return None
+
+        # Parse the two sections
+        import re as _re
+        analysis, advice = "", ""
+        analysis_match = _re.search(r"ANALYSIS:\s*(.+?)(?=ADVICE:|$)", raw, _re.S)
+        advice_match   = _re.search(r"ADVICE:\s*(.+?)$", raw, _re.S)
+        if analysis_match:
+            analysis = analysis_match.group(1).strip()
+        if advice_match:
+            advice = advice_match.group(1).strip()
+
+        if analysis and advice:
+            return {"analysis": analysis, "advice": advice}
+        # Fallback: put everything in analysis
+        return {"analysis": raw, "advice": ""}

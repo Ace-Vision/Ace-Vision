@@ -80,7 +80,7 @@ function Result() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">Results</span>
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">Results</span>
       </div>
 
       <div className="px-5 pt-2 space-y-5">
@@ -104,7 +104,7 @@ function Result() {
           style={{ animationDelay: '0.1s' }}
         >
           <div>
-            <p className="text-[11px] font-semibold text-white/25 uppercase tracking-widest mb-1">Overall Score</p>
+            <p className="text-[13px] font-semibold text-white/25 uppercase tracking-widest mb-1">Overall Score</p>
             <p
               className="font-black text-white tabular-nums"
               style={{ fontSize: '76px', lineHeight: 1, letterSpacing: '-0.04em' }}
@@ -126,7 +126,7 @@ function Result() {
 
         {/* Breakdown */}
         <div className="animate-fade-up" style={{ animationDelay: '0.2s' }}>
-          <p className="text-[11px] font-semibold text-white/25 uppercase tracking-widest mb-3">Breakdown</p>
+          <p className="text-[13px] font-semibold text-white/25 uppercase tracking-widest mb-3">Breakdown</p>
           <div className="space-y-2">
             {CHECKPOINTS.map(({ key, label }) => {
               const score = checkpointScore(checkpoints[key]);
@@ -183,7 +183,7 @@ function Result() {
         {/* AI Coach */}
         {coaching?.advice && (
           <div className="card-sm px-4 py-4 animate-fade-up" style={{ animationDelay: '0.3s' }}>
-            <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">AI Coach</p>
+            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">AI Coach</p>
             <ReactMarkdown
               components={{
                 p: ({ children }) => <p className="text-sm text-white/55 leading-relaxed mb-2 last:mb-0">{children}</p>,

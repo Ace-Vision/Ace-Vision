@@ -441,11 +441,10 @@ async def get_rally_coaching(body: dict):
     if feedback is None:
         raise HTTPException(status_code=503, detail="LLM unavailable")
 
-    result = {"feedback": feedback}
     os.makedirs(os.path.join("data", "results", session_id), exist_ok=True)
     with open(cache_path, "w") as f:
-        _json.dump(result, f)
-    return result
+        _json.dump(feedback, f)
+    return feedback
 
 
 @app.post("/analyse_score")
@@ -632,6 +631,74 @@ def get_match_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
     }
 
 
+@app.get("/improvement_stat")
+def get_improvement_stat(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    import json as _json
+    from collections import defaultdict
+
+    VALID_TAGS = {"net_error", "out_long", "swing_miss", "bad_footwork", "late_reaction", "weak_return", "serve_fault", "forced_error"}
+
+    sessions = (
+        sqlite_db.query(db.MatchSession)
+        .filter(db.MatchSession.user_id == current_user.id)
+        .order_by(db.MatchSession.created_at)  # oldest first
+        .all()
+    )
+
+    labeled = []
+    for ms in sessions:
+        path = os.path.join("data", "results", ms.id, "labels.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                raw = _json.load(f)
+        except Exception:
+            continue
+        counts: dict[str, int] = defaultdict(int)
+        for v in raw.values():
+            if v in VALID_TAGS:
+                counts[v] += 1
+        if sum(counts.values()) > 0:
+            labeled.append(dict(counts))
+
+    if len(labeled) < 4:
+        return {"stat": None}
+
+    mid = len(labeled) // 2
+    older, newer = labeled[:mid], labeled[mid:]
+    older_total = sum(sum(s.values()) for s in older)
+    newer_total = sum(sum(s.values()) for s in newer)
+
+    if older_total == 0 or newer_total == 0:
+        return {"stat": None}
+
+    best_tag, best_reduction = None, 0.0
+    for tag in VALID_TAGS:
+        older_rate = sum(s.get(tag, 0) for s in older) / older_total
+        newer_rate = sum(s.get(tag, 0) for s in newer) / newer_total
+        if older_rate >= 0.05:  # was a real problem before
+            reduction = (older_rate - newer_rate) / older_rate
+            if reduction > best_reduction:
+                best_reduction = reduction
+                best_tag = tag
+
+    if best_tag is not None and best_reduction >= 0.10:
+        return {"stat": {"type": "improvement", "tag": best_tag, "reduction_pct": round(best_reduction * 100)}}
+
+    # Fallback: return the single most frequent error across all sessions
+    all_counts: dict[str, int] = defaultdict(int)
+    for s in labeled:
+        for tag, n in s.items():
+            all_counts[tag] += n
+    grand_total = sum(all_counts.values())
+    if grand_total == 0:
+        return {"stat": None}
+    top_tag = max(all_counts, key=lambda t: all_counts[t])
+    top_pct  = round(all_counts[top_tag] / grand_total * 100)
+    return {"stat": {"type": "top_error", "tag": top_tag, "pct": top_pct}}
+
+
 @app.get("/users/me/match_history")
 def get_my_match_history(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
     sessions = (
@@ -725,7 +792,8 @@ async def get_opponent_coaching(body: dict):
         raise HTTPException(status_code=503, detail="LLM unavailable")
     if feedback is None:
         raise HTTPException(status_code=503, detail="LLM unavailable")
-    return {"feedback": feedback}
+    # feedback is now {"analysis": "...", "advice": "..."}
+    return feedback
 
 
 @app.post("/users", response_model=UserRead)

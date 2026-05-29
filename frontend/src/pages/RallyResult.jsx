@@ -19,9 +19,14 @@ function finalizeSession(sessionId) {
 }
 
 const LABEL_OPTIONS = [
-  { value: 'swing_miss',   label: 'Swing Miss' },
-  { value: 'bad_footwork', label: 'Bad Footwork' },
-  { value: 'other',        label: 'Other' },
+  { value: 'net_error',     label: 'Net Error' },
+  { value: 'out_long',      label: 'Out / Long' },
+  { value: 'swing_miss',    label: 'Swing Miss' },
+  { value: 'bad_footwork',  label: 'Bad Footwork' },
+  { value: 'late_reaction', label: 'Late Reaction' },
+  { value: 'weak_return',   label: 'Weak Return' },
+  { value: 'serve_fault',   label: 'Serve Fault' },
+  { value: 'forced_error',  label: 'Forced Error' },
 ];
 
 // ── Court minimap ─────────────────────────────────────────────────────────────
@@ -231,7 +236,7 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: accent, textTransform: 'uppercase' }}>
           {isBoth ? 'Multiple Rallies' : isWin ? 'Point Won' : 'Point Lost'}
         </span>
-        <span className="text-[11px] text-white/20">{duration}s</span>
+        <span className="text-[13px] text-white/20">{duration}s</span>
       </div>
 
       {/* Multi-rally notice */}
@@ -287,10 +292,10 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
       {oppDiff > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">
+            <p className="text-[12px] font-semibold text-white/20 uppercase tracking-widest">
               {oppDiff > 1 ? `Tag losses (${oppDiff})` : 'Tag this loss'}
             </p>
-            {isLocked && <span className="text-[10px] text-white/20">🔒</span>}
+            {isLocked && <span className="text-[12px] text-white/20">🔒</span>}
           </div>
           {Array.from({ length: oppDiff }).map((_, lossIdx) => {
             const key = `${rally.index}_${lossIdx}`;
@@ -298,7 +303,7 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
             return (
               <div key={lossIdx}>
                 {oppDiff > 1 && (
-                  <p className="text-[9px] text-white/15 uppercase tracking-widest mb-1.5">
+                  <p className="text-[13px] text-white/15 uppercase tracking-widest mb-1.5">
                     Loss {lossIdx + 1}
                   </p>
                 )}
@@ -326,15 +331,20 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
 
       {/* Rally note */}
       <div>
-        <div className="flex items-center gap-2 mb-2">
-          <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest">Note</p>
-          {isLocked && <span className="text-[10px] text-white/20">🔒</span>}
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-[12px] font-semibold text-white/45 uppercase tracking-widest">Rally Note</p>
+          {isLocked && <span className="text-[12px] text-white/40">🔒</span>}
         </div>
+        {!isLocked && (
+          <p className="text-xs text-white/45 mb-2 leading-relaxed">
+            What went well or badly? Any impression — good notes mean better AI feedback later.
+          </p>
+        )}
         <textarea
           value={note || ''}
           onChange={e => !isLocked && onNote(rally.index, e.target.value)}
           readOnly={isLocked}
-          placeholder={isLocked ? '' : 'Add a note about this rally…'}
+          placeholder={isLocked ? '' : 'e.g. Got caught off guard, footwork was late on this one.'}
           rows={2}
           className="w-full px-3 py-2.5 rounded-xl text-xs text-white placeholder:text-white/15 outline-none resize-none"
           style={{
@@ -362,17 +372,22 @@ function RallyPage({ rally, labels, onLabel, note, onNote, sessionId, onNext, is
 function SummaryPage({ summary, totalLossSlots, labels, onHome, onHistory, fromHistory, feedback, feedbackLoading, feedbackError, opponentName, sessionId }) {
   // Lock the session the moment the user sees the summary
   useEffect(() => { finalizeSession(sessionId); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const counts = { swing_miss: 0, bad_footwork: 0, other: 0 };
+  const counts = { net_error: 0, out_long: 0, swing_miss: 0, bad_footwork: 0, late_reaction: 0, weak_return: 0, serve_fault: 0, forced_error: 0 };
   Object.values(labels).forEach(l => {
     if (l in counts) counts[l]++;
   });
   const unlabeled = Math.max(0, totalLossSlots - Object.keys(labels).length);
 
   const pieSlices = [
-    { label: 'Swing Miss',   count: counts.swing_miss,   color: '#FF6B6B' },
-    { label: 'Bad Footwork', count: counts.bad_footwork, color: '#FF9F43' },
-    { label: 'Other',        count: counts.other,        color: '#636e72' },
-    { label: 'Unlabeled',    count: unlabeled,            color: 'rgba(255,255,255,0.10)' },
+    { label: 'Net Error',     count: counts.net_error,     color: '#FF6B6B' },
+    { label: 'Out / Long',    count: counts.out_long,      color: '#FF9F43' },
+    { label: 'Swing Miss',    count: counts.swing_miss,    color: '#FFC107' },
+    { label: 'Bad Footwork',  count: counts.bad_footwork,  color: '#48CAE4' },
+    { label: 'Late Reaction', count: counts.late_reaction, color: '#A29BFE' },
+    { label: 'Weak Return',   count: counts.weak_return,   color: '#55EFC4' },
+    { label: 'Serve Fault',   count: counts.serve_fault,   color: '#FD79A8' },
+    { label: 'Forced Error',  count: counts.forced_error,  color: '#FDCB6E' },
+    { label: 'Unlabeled',     count: unlabeled,             color: 'rgba(255,255,255,0.10)' },
   ];
 
   return (
@@ -380,7 +395,7 @@ function SummaryPage({ summary, totalLossSlots, labels, onHome, onHistory, fromH
 
       {/* Score */}
       <div>
-        <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-3">
+        <p className="text-[12px] font-semibold text-white/25 uppercase tracking-widest mb-3">
           Match Summary
         </p>
         <div className="flex items-baseline gap-3">
@@ -398,35 +413,52 @@ function SummaryPage({ summary, totalLossSlots, labels, onHome, onHistory, fromH
       {/* Pie chart — only if there were losses */}
       {totalLossSlots > 0 && (
         <div>
-          <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
+          <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-4">
             Loss Breakdown
           </p>
           <PieChart slices={pieSlices} />
         </div>
       )}
 
-      {/* AI Coaching */}
+      {/* AI Coaching — Match Analysis */}
       <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest">AI Coaching</p>
-          {opponentName ? (
-            <span className="text-[10px] text-white/20">vs {opponentName}</span>
-          ) : null}
+          <p className="text-[12px] font-bold text-white/45 uppercase tracking-widest">Match Analysis</p>
+          {opponentName ? <span className="text-[12px] text-white/40">vs {opponentName}</span> : null}
         </div>
         {feedbackLoading ? (
           <div className="space-y-1.5">
-            <div className="h-2 rounded-full bg-white/[0.05] w-full" style={{ animation: 'pulse 1.5s ease-in-out infinite' }} />
-            <div className="h-2 rounded-full bg-white/[0.05] w-4/5" style={{ animation: 'pulse 1.5s ease-in-out infinite 0.15s' }} />
-            <div className="h-2 rounded-full bg-white/[0.05] w-3/5" style={{ animation: 'pulse 1.5s ease-in-out infinite 0.3s' }} />
+            {[1, 0.8, 0.6].map((w, i) => (
+              <div key={i} className="h-2 rounded-full bg-white/[0.05]"
+                style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
+            ))}
           </div>
-        ) : feedback ? (
-          <p className="text-sm text-white/60 leading-relaxed">{feedback}</p>
+        ) : feedback?.analysis ? (
+          <p className="text-sm text-white/70 leading-relaxed">{feedback.analysis}</p>
         ) : feedbackError === 'quota' ? (
-          <p className="text-xs text-white/30 leading-relaxed">
-            API quota exceeded — feedback will be available again tomorrow.
-          </p>
+          <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
         ) : feedbackError === 'error' ? (
-          <p className="text-xs text-white/20">Feedback unavailable</p>
+          <p className="text-xs text-white/40">Analysis unavailable.</p>
+        ) : null}
+      </div>
+
+      {/* AI Coaching — Training Focus */}
+      <div className="rounded-2xl bg-[#0d0d0d] p-4 space-y-3"
+        style={{ border: '1px solid rgba(200,255,87,0.15)' }}>
+        <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest">Training Focus</p>
+        {feedbackLoading ? (
+          <div className="space-y-1.5">
+            {[1, 0.75].map((w, i) => (
+              <div key={i} className="h-2 rounded-full bg-white/[0.05]"
+                style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
+            ))}
+          </div>
+        ) : feedback?.training ? (
+          <p className="text-sm text-white/70 leading-relaxed">{feedback.training}</p>
+        ) : feedbackError === 'quota' ? (
+          <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
+        ) : feedbackError === 'error' ? (
+          <p className="text-xs text-white/40">Training advice unavailable.</p>
         ) : null}
       </div>
 
@@ -531,8 +563,11 @@ function RallyResult() {
         if (r.status === 429) { setFeedbackError('quota'); return; }
         if (!r.ok) { setFeedbackError('error'); return; }
         const data = await r.json();
-        setFeedback(data?.feedback ?? null);
-        if (!data?.feedback) setFeedbackError('error');
+        if (data?.analysis) {
+          setFeedback(data);
+        } else {
+          setFeedbackError('error');
+        }
       })
       .catch(() => setFeedbackError('error'))
       .finally(() => setFeedbackLoading(false));
@@ -569,11 +604,11 @@ function RallyResult() {
           >
             ‹
           </button>
-          <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+          <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
             Rally Analysis
           </span>
         </div>
-        <span className="text-[11px] text-white/20 tabular-nums">
+        <span className="text-[13px] text-white/20 tabular-nums">
           {page + 1} / {totalPages}
         </span>
       </div>

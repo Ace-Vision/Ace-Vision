@@ -46,12 +46,12 @@ function PieChart({ slices }) {
             <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.color }} />
             <span className="text-xs text-white/50">{s.label}</span>
             <span className="text-xs font-bold text-white ml-2 tabular-nums">{s.count}</span>
-            <span className="text-[10px] text-white/20">
+            <span className="text-[12px] text-white/20">
               ({Math.round(s.count / total * 100)}%)
             </span>
           </div>
         ))}
-        <p className="text-[10px] text-white/20 pt-1">{total} tagged losses total</p>
+        <p className="text-[12px] text-white/20 pt-1">{total} tagged losses total</p>
       </div>
     </div>
   );
@@ -128,7 +128,7 @@ function Insights() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Insights
         </span>
       </div>
@@ -141,7 +141,7 @@ function Insights() {
           style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)' }}
         >
           <div className="mb-4">
-            <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
+            <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-1">
               Last 2 Weeks · {sportLabel}
             </p>
             <p className="text-xs text-white/35">
@@ -201,12 +201,6 @@ function Insights() {
           <div className="flex items-center gap-2 mb-1">
             <span className="text-white font-semibold" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
               Opponent Book
-            </span>
-            <span
-              className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-              style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.3)', letterSpacing: '0.06em' }}
-            >
-              SOON
             </span>
           </div>
           <div className="text-white/30 text-xs">

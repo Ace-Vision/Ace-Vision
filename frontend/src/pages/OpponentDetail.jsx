@@ -51,12 +51,12 @@ function PieChart({ slices }) {
             <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.color }} />
             <span className="text-xs text-white/50">{s.label}</span>
             <span className="text-xs font-bold text-white ml-2 tabular-nums">{s.count}</span>
-            <span className="text-[10px] text-white/20">
+            <span className="text-[12px] text-white/20">
               ({Math.round(s.count / total * 100)}%)
             </span>
           </div>
         ))}
-        <p className="text-[10px] text-white/20 pt-1">{total} tagged losses total</p>
+        <p className="text-[12px] text-white/20 pt-1">{total} tagged losses total</p>
       </div>
     </div>
   );
@@ -88,7 +88,7 @@ function OpponentDetail() {
   const [allPositions, setAllPositions] = useState([]);
   const positionsFetched = useRef(false);
 
-  // AI coaching
+  // AI coaching — {analysis, advice} object
   const [coaching, setCoaching]     = useState(null);
   const [coachingLoading, setCoachingLoading] = useState(false);
   const [coachingError, setCoachingError]     = useState(null);
@@ -106,18 +106,23 @@ function OpponentDetail() {
           .catch(() => ({}))
       )
     ).then(results => {
-      const counts = { swing_miss: 0, bad_footwork: 0, other: 0 };
+      const counts = { net_error: 0, out_long: 0, swing_miss: 0, bad_footwork: 0, late_reaction: 0, weak_return: 0, serve_fault: 0, forced_error: 0 };
       for (const labels of results) {
         for (const v of Object.values(labels)) {
           if (v in counts) counts[v]++;
         }
       }
-      const total = counts.swing_miss + counts.bad_footwork + counts.other;
+      const total = Object.values(counts).reduce((s, n) => s + n, 0);
       setTotalLabeled(total);
       setPieSlices([
-        { label: 'Swing Miss',   count: counts.swing_miss,   color: '#FF6B6B' },
-        { label: 'Bad Footwork', count: counts.bad_footwork, color: '#FF9F43' },
-        { label: 'Other',        count: counts.other,        color: '#636e72' },
+        { label: 'Net Error',     count: counts.net_error,     color: '#FF6B6B' },
+        { label: 'Out / Long',    count: counts.out_long,      color: '#FF9F43' },
+        { label: 'Swing Miss',    count: counts.swing_miss,    color: '#FFC107' },
+        { label: 'Bad Footwork',  count: counts.bad_footwork,  color: '#48CAE4' },
+        { label: 'Late Reaction', count: counts.late_reaction, color: '#A29BFE' },
+        { label: 'Weak Return',   count: counts.weak_return,   color: '#55EFC4' },
+        { label: 'Serve Fault',   count: counts.serve_fault,   color: '#FD79A8' },
+        { label: 'Forced Error',  count: counts.forced_error,  color: '#FDCB6E' },
       ]);
       setLabelsLoading(false);
     });
@@ -144,26 +149,36 @@ function OpponentDetail() {
     if (labelsLoading || coachingFetched.current || !opponent) return;
     coachingFetched.current = true;
 
-    // Build zone description from positions
+    // Cache key includes opponent name + all session IDs so cache
+    // is invalidated automatically when a new match is added.
+    const cacheKey = `av_coaching_${opponent.name}_${sessionIds.sort().join(',')}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try { setCoaching(JSON.parse(cached)); } catch { /* ignore malformed cache */ }
+      return;
+    }
+
+    // Build zone description from positions.
+    // Skip mid-court: players always start there on serve, so average position
+    // clustering in the middle reflects starting position, not opponent pressure.
     let zoneDescription = '';
+    let zoneLabel = '';
     if (allPositions.length >= 5) {
       const avgX = allPositions.reduce((s, p) => s + p.cx, 0) / allPositions.length;
       const avgY = allPositions.reduce((s, p) => s + p.cy, 0) / allPositions.length;
-      const yZone = avgY < COURT_H * 0.33 ? 'forecourt (near the net)'
-                  : avgY < COURT_H * 0.66 ? 'mid-court'
-                  : 'back court';
-      const xZone = avgX < COURT_W * 0.33 ? 'left side'
-                  : avgX > COURT_W * 0.66 ? 'right side'
-                  : 'center';
-      zoneDescription = `${opponent.name} tends to push you into the ${yZone}, ${xZone} of the court.`;
+      const yPart = avgY < COURT_H * 0.33 ? 'top' : avgY >= COURT_H * 0.66 ? 'bottom' : 'middle';
+      if (yPart !== 'middle') {
+        const xPart = avgX < COURT_W * 0.33 ? 'left' : avgX > COURT_W * 0.66 ? 'right' : 'center';
+        zoneLabel = xPart === 'center' ? `${yPart}-center` : `${yPart}-${xPart}`;
+        zoneDescription = `${opponent.name} consistently pushes you into the ${zoneLabel} zone.`;
+      }
     }
 
     const comments = sessions
       .map(s => s.match_comment)
       .filter(c => c && c.trim());
 
-    const mistakeCounts = {};
-    pieSlices.forEach(s => { mistakeCounts[s.label.toLowerCase().replace(' ', '_')] = s.count; });
+    const find = label => pieSlices.find(s => s.label === label)?.count ?? 0;
 
     setCoachingLoading(true);
     fetch(`${API_BASE}/opponent_coaching`, {
@@ -176,11 +191,17 @@ function OpponentDetail() {
         total_wins:     opponent.wins,
         total_losses:   opponent.losses,
         mistake_counts: {
-          swing_miss:   pieSlices.find(s => s.label === 'Swing Miss')?.count   ?? 0,
-          bad_footwork: pieSlices.find(s => s.label === 'Bad Footwork')?.count ?? 0,
-          other:        pieSlices.find(s => s.label === 'Other')?.count        ?? 0,
+          net_error:     find('Net Error'),
+          out_long:      find('Out / Long'),
+          swing_miss:    find('Swing Miss'),
+          bad_footwork:  find('Bad Footwork'),
+          late_reaction: find('Late Reaction'),
+          weak_return:   find('Weak Return'),
+          serve_fault:   find('Serve Fault'),
+          forced_error:  find('Forced Error'),
         },
         zone_description: zoneDescription,
+        zone_label: zoneLabel,
         comments,
       }),
     })
@@ -188,8 +209,12 @@ function OpponentDetail() {
         if (r.status === 429) { setCoachingError('quota'); return; }
         if (!r.ok) { setCoachingError('error'); return; }
         const data = await r.json();
-        setCoaching(data?.feedback ?? null);
-        if (!data?.feedback) setCoachingError('error');
+        if (data?.analysis) {
+          localStorage.setItem(cacheKey, JSON.stringify(data));
+          setCoaching(data);
+        } else {
+          setCoachingError('error');
+        }
       })
       .catch(() => setCoachingError('error'))
       .finally(() => setCoachingLoading(false));
@@ -216,7 +241,7 @@ function OpponentDetail() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Opponent Book
         </span>
       </div>
@@ -226,7 +251,7 @@ function OpponentDetail() {
         {/* Opponent name + W-L */}
         <div className="animate-fade-up">
           <div className="flex items-baseline gap-2 mb-2">
-            <span className="text-[11px] font-bold text-white/25 uppercase tracking-widest">VS</span>
+            <span className="text-[13px] font-bold text-white/25 uppercase tracking-widest">VS</span>
             <h1 className="font-black text-white" style={{ fontSize: '40px', lineHeight: 1, letterSpacing: '-0.03em' }}>
               {opponent.name}
             </h1>
@@ -250,7 +275,7 @@ function OpponentDetail() {
           className="rounded-2xl p-5 animate-fade-up"
           style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)', animationDelay: '0.05s' }}
         >
-          <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
+          <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-4">
             Loss Breakdown vs {opponent.name}
           </p>
           {labelsLoading ? (
@@ -274,7 +299,7 @@ function OpponentDetail() {
             style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)', animationDelay: '0.1s' }}
           >
             <div className="px-5 pt-4 pb-3">
-              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
+              <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-1">
                 Shot Placement Heatmap
               </p>
               <p className="text-xs text-white/35">
@@ -296,7 +321,7 @@ function OpponentDetail() {
             className="rounded-2xl p-5 animate-fade-up"
             style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)', animationDelay: '0.15s' }}
           >
-            <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-3">
+            <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-3">
               Your Match Notes
             </p>
             <div className="space-y-3">
@@ -309,13 +334,13 @@ function OpponentDetail() {
           </div>
         )}
 
-        {/* AI coaching */}
+        {/* AI coaching — Analysis */}
         <div
           className="rounded-2xl p-5 animate-fade-up"
-          style={{ background: '#0d0d0d', border: '1px solid rgba(200,255,87,0.12)', animationDelay: '0.2s' }}
+          style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)', animationDelay: '0.2s' }}
         >
-          <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">
-            AI Scouting Advice
+          <p className="text-[12px] font-bold text-white/45 uppercase tracking-widest mb-3">
+            Past Match Analysis
           </p>
           {coachingLoading ? (
             <div className="space-y-2">
@@ -324,12 +349,36 @@ function OpponentDetail() {
                   style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
               ))}
             </div>
-          ) : coaching ? (
-            <p className="text-sm text-white/60 leading-relaxed">{coaching}</p>
+          ) : coaching?.analysis ? (
+            <p className="text-sm text-white/70 leading-relaxed">{coaching.analysis}</p>
           ) : coachingError === 'quota' ? (
-            <p className="text-xs text-white/30">API quota exceeded — try again tomorrow.</p>
+            <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
           ) : (
-            <p className="text-xs text-white/20">Coaching unavailable.</p>
+            <p className="text-xs text-white/40">Analysis unavailable.</p>
+          )}
+        </div>
+
+        {/* AI coaching — Advice */}
+        <div
+          className="rounded-2xl p-5 animate-fade-up"
+          style={{ background: '#0d0d0d', border: '1px solid rgba(200,255,87,0.15)', animationDelay: '0.25s' }}
+        >
+          <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">
+            Next Match Goals
+          </p>
+          {coachingLoading ? (
+            <div className="space-y-2">
+              {[1, 0.75].map((w, i) => (
+                <div key={i} className="h-2 rounded-full bg-white/[0.05]"
+                  style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
+              ))}
+            </div>
+          ) : coaching?.advice ? (
+            <p className="text-sm text-white/70 leading-relaxed">{coaching.advice}</p>
+          ) : !coachingLoading && !coachingError ? null : coachingError === 'quota' ? (
+            <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
+          ) : (
+            <p className="text-xs text-white/40">Advice unavailable.</p>
           )}
         </div>
 

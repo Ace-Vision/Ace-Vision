@@ -18,7 +18,7 @@ function ClipGroup({ label, clips, sessionId, shots }) {
 
   return (
     <div>
-      <p className="text-[11px] font-semibold text-white/25 uppercase tracking-widest mb-3">
+      <p className="text-[13px] font-semibold text-white/25 uppercase tracking-widest mb-3">
         {label} <span className="text-white/15 normal-case font-normal">({clips.length})</span>
       </p>
       <div className="space-y-2">
@@ -33,7 +33,7 @@ function ClipGroup({ label, clips, sessionId, shots }) {
                 className="w-full"
                 onLoadedMetadata={e => { e.target.playbackRate = 0.5; }}
               />
-              <p className="text-[10px] text-white/20 px-3 py-2">
+              <p className="text-[12px] text-white/20 px-3 py-2">
                 Peak at {shot.peak_time_s?.toFixed(1)}s
                 {shot.confidence != null && (
                   <span className="ml-2 text-white/15">conf {(shot.confidence * 100).toFixed(0)}%</span>
@@ -90,7 +90,7 @@ function MatchResult() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">Match Analysis</span>
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">Match Analysis</span>
       </div>
 
       <div className="px-5 pt-4 space-y-8">
@@ -105,13 +105,13 @@ function MatchResult() {
           <div className="flex flex-wrap gap-2 mt-4">
             {activeTypes.map(({ key, label }) => (
               <span key={key}
-                className="text-[11px] font-semibold px-3 py-1 rounded-full"
+                className="text-[13px] font-semibold px-3 py-1 rounded-full"
                 style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
                 {byType[key].length} {label}
               </span>
             ))}
             {lowConfidence.length > 0 && (
-              <span className="text-[11px] font-semibold px-3 py-1 rounded-full"
+              <span className="text-[13px] font-semibold px-3 py-1 rounded-full"
                 style={{ background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.2)' }}>
                 {lowConfidence.length} unclear
               </span>
@@ -123,7 +123,7 @@ function MatchResult() {
         {coaching?.advice && (
           <div className="rounded-2xl px-4 py-4 animate-fade-up"
             style={{ background: '#111', border: '1px solid rgba(200,255,87,0.15)', animationDelay: '0.1s' }}>
-            <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">Key Focus</p>
+            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">Key Focus</p>
             <ReactMarkdown components={{
               p: ({ children }) => <p className="text-sm text-white/55 leading-relaxed mb-2 last:mb-0">{children}</p>,
               strong: ({ children }) => <span className="font-semibold text-white">{children}</span>,

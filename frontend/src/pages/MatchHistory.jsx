@@ -74,7 +74,7 @@ function MatchHistory() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           {preferredSport === 'tennis_serve' ? 'Tennis' : 'Badminton'} History
         </span>
       </div>
@@ -111,7 +111,7 @@ function MatchHistory() {
               >
                 {/* Opponent name */}
                 <div className="flex items-baseline gap-2 mb-3">
-                  <span className="text-[11px] font-bold text-white/25 uppercase tracking-widest">VS</span>
+                  <span className="text-[13px] font-bold text-white/25 uppercase tracking-widest">VS</span>
                   <span
                     className="font-black text-white truncate"
                     style={{ fontSize: '28px', lineHeight: 1, letterSpacing: '-0.03em' }}
@@ -122,7 +122,7 @@ function MatchHistory() {
 
                 {/* Score + meta */}
                 <div className="flex items-center justify-between">
-                  <p className="text-white/25 text-[11px]">
+                  <p className="text-white/25 text-[13px]">
                     {sportLabel(m.sport_type)} · {formatDate(m.created_at)}
                   </p>
                   <div className="flex items-center gap-2">

@@ -102,7 +102,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Court Setup
         </span>
       </div>
@@ -181,7 +181,7 @@ export default function CourtCalibrator({ videoFile, onConfirm, onBack }) {
         </div>
       </div>
 
-      <p className="mt-3 text-[11px] text-white/20 text-center flex-shrink-0">
+      <p className="mt-3 text-[13px] text-white/20 text-center flex-shrink-0">
         Corner off-screen? Drag beyond the video edge
       </p>
 

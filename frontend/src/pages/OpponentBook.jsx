@@ -59,7 +59,7 @@ function OpponentBook() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Opponent Book
         </span>
       </div>
@@ -95,7 +95,7 @@ function OpponentBook() {
                 style={{ background: '#111', border: '1px solid rgba(255,255,255,0.07)' }}
               >
                 <div className="flex items-baseline gap-2 mb-3">
-                  <span className="text-[11px] font-bold text-white/25 uppercase tracking-widest">VS</span>
+                  <span className="text-[13px] font-bold text-white/25 uppercase tracking-widest">VS</span>
                   <span
                     className="font-black text-white truncate"
                     style={{ fontSize: '28px', lineHeight: 1, letterSpacing: '-0.03em' }}
@@ -104,7 +104,7 @@ function OpponentBook() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <p className="text-white/25 text-[11px]">
+                  <p className="text-white/25 text-[13px]">
                     {opp.sessions.length} {opp.sessions.length === 1 ? 'match' : 'matches'} · Last {formatDate(opp.lastDate)}
                   </p>
                   <div className="flex items-center gap-2">

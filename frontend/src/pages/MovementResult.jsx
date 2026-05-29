@@ -246,8 +246,11 @@ function MovementResult() {
         if (r.status === 429) { setCoachingError('quota'); return; }
         if (!r.ok)            { setCoachingError('error'); return; }
         const data = await r.json();
-        setCoachingText(data?.feedback ?? null);
-        if (!data?.feedback) setCoachingError('error');
+        if (data?.analysis) {
+          setCoachingText(data);
+        } else {
+          setCoachingError('error');
+        }
       })
       .catch(() => setCoachingError('error'))
       .finally(() => setCoachingLoading(false));
@@ -284,7 +287,7 @@ function MovementResult() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Movement Analysis
         </span>
       </div>
@@ -295,7 +298,7 @@ function MovementResult() {
           <button
             key={i}
             onClick={() => setPage(i)}
-            className="pb-3 text-[11px] font-bold uppercase tracking-widest transition-colors"
+            className="pb-3 text-[13px] font-bold uppercase tracking-widest transition-colors"
             style={{
               color: page === i ? '#C8FF57' : 'rgba(255,255,255,0.2)',
               borderBottom: page === i ? '2px solid #C8FF57' : '2px solid transparent',
@@ -360,7 +363,7 @@ function MovementResult() {
                   <span className="text-base font-semibold text-white">
                     {opponentName || 'Opponent'}
                   </span>
-                  <span className="text-[11px] text-white/30">✎</span>
+                  <span className="text-[13px] text-white/30">✎</span>
                 </button>
               )}
             </div>
@@ -392,7 +395,7 @@ function MovementResult() {
                 ) : (
                   <p className="text-sm text-white/15 italic">No comment added.</p>
                 )}
-                <p className="text-[10px] text-white/15 mt-2 uppercase tracking-widest">🔒 Locked</p>
+                <p className="text-[12px] text-white/15 mt-2 uppercase tracking-widest">🔒 Locked</p>
               </div>
             ) : editingComment ? (
               <textarea
@@ -423,7 +426,7 @@ function MovementResult() {
                 ) : (
                   <p className="text-sm text-white/20 italic">Tap to add a note about the match…</p>
                 )}
-                <p className="text-[10px] text-white/20 mt-2 uppercase tracking-widest">Tap to edit  ✎</p>
+                <p className="text-[12px] text-white/20 mt-2 uppercase tracking-widest">Tap to edit  ✎</p>
               </button>
             )}
           </div>
@@ -438,7 +441,7 @@ function MovementResult() {
           {/* Win / Loss heatmaps */}
           <div className="animate-fade-up space-y-3">
             <div>
-              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
+              <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-1">
                 Zone Comparison
               </p>
               <p className="text-xs text-white/45 leading-relaxed">
@@ -448,7 +451,7 @@ function MovementResult() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-2 px-1">
+                <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-2 px-1">
                   Your wins
                 </p>
                 <div className="rounded-xl overflow-hidden bg-[#111] border border-white/[0.06]">
@@ -460,7 +463,7 @@ function MovementResult() {
                 </div>
               </div>
               <div>
-                <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2 px-1">
+                <p className="text-[12px] font-bold text-white/30 uppercase tracking-widest mb-2 px-1">
                   Opp. wins
                 </p>
                 <div className="rounded-xl overflow-hidden bg-[#111] border border-white/[0.06]">
@@ -475,7 +478,7 @@ function MovementResult() {
 
             {/* Rule-based insight */}
             {insight === null ? (
-              <p className="text-[11px] text-white/20 text-center py-1">
+              <p className="text-[13px] text-white/20 text-center py-1">
                 Not enough rally data for zone analysis.
               </p>
             ) : insight.type === 'good' ? (
@@ -483,7 +486,7 @@ function MovementResult() {
                 className="rounded-2xl p-4 space-y-1"
                 style={{ background: 'rgba(200,255,87,0.07)', border: '1px solid rgba(200,255,87,0.2)' }}
               >
-                <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#C8FF57' }}>
+                <p className="text-[13px] font-black uppercase tracking-widest" style={{ color: '#C8FF57' }}>
                   ✓ Balanced Coverage
                 </p>
                 <p className="text-xs leading-relaxed" style={{ color: 'rgba(200,255,87,0.72)' }}>
@@ -495,7 +498,7 @@ function MovementResult() {
                 className="rounded-2xl p-4 space-y-1"
                 style={{ background: 'rgba(255,140,0,0.08)', border: '1px solid rgba(255,140,0,0.25)' }}
               >
-                <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#FFA040' }}>
+                <p className="text-[13px] font-black uppercase tracking-widest" style={{ color: '#FFA040' }}>
                   ⚠ Weak Zone Detected
                 </p>
                 <p className="text-xs leading-relaxed" style={{ color: 'rgba(255,160,64,0.88)' }}>
@@ -511,7 +514,7 @@ function MovementResult() {
           {phase_analysis && (
             <div className="animate-fade-up space-y-3" style={{ animationDelay: '0.06s' }}>
               <div>
-                <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
+                <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-1">
                   Movement by Phase
                 </p>
                 <p className="text-xs text-white/45 leading-relaxed">
@@ -527,11 +530,11 @@ function MovementResult() {
                   return (
                     <div key={i}>
                       <div className="flex items-center justify-between px-0.5 mb-1.5">
-                        <span className="text-[9px] text-white/25 uppercase tracking-wider">
+                        <span className="text-[13px] text-white/25 uppercase tracking-wider">
                           {i === 0 ? 'Early' : i === 1 ? 'Mid' : 'Late'}
                         </span>
                         <span
-                          className="text-[10px] font-bold tabular-nums"
+                          className="text-[12px] font-bold tabular-nums"
                           style={{ color: flagged ? '#FF6B6B' : 'rgba(255,255,255,0.35)' }}
                         >
                           {pct}%
@@ -558,7 +561,7 @@ function MovementResult() {
                           }}
                         />
                       </div>
-                      <p className="mt-1 text-[9px] text-white/20 text-center leading-tight">
+                      <p className="mt-1 text-[13px] text-white/20 text-center leading-tight">
                         {captions[i]}
                       </p>
                     </div>
@@ -571,7 +574,7 @@ function MovementResult() {
                   className="rounded-2xl p-4 space-y-2"
                   style={{ background: 'rgba(255,60,60,0.10)', border: '1px solid rgba(255,60,60,0.45)' }}
                 >
-                  <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#FF3C3C' }}>
+                  <p className="text-[13px] font-black uppercase tracking-widest" style={{ color: '#FF3C3C' }}>
                     ⚠ Stamina Alert
                   </p>
                   <p className="text-xs font-semibold leading-relaxed" style={{ color: 'rgba(255,100,100,0.85)' }}>
@@ -584,7 +587,7 @@ function MovementResult() {
                   className="rounded-2xl p-4 space-y-2"
                   style={{ background: 'rgba(200,255,87,0.07)', border: '1px solid rgba(200,255,87,0.25)' }}
                 >
-                  <p className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#C8FF57' }}>
+                  <p className="text-[13px] font-black uppercase tracking-widest" style={{ color: '#C8FF57' }}>
                     ✓ Stamina Good
                   </p>
                   <p className="text-xs font-semibold leading-relaxed" style={{ color: 'rgba(200,255,87,0.70)' }}>
@@ -623,44 +626,54 @@ function MovementResult() {
           {/* Loss breakdown pie chart */}
           {totalLossSlots > 0 && (
             <div>
-              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
+              <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-4">
                 Loss Breakdown
               </p>
               <PieChart slices={pieSlices} />
             </div>
           )}
 
-          <div>
-            <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-1">
-              AI Coaching
-            </p>
-            <p className="text-xs text-white/40 leading-relaxed">
-              Personalized feedback based on your match result and movement data.
-            </p>
-          </div>
-
+          {/* Match Analysis */}
           <div
-            className="rounded-2xl p-4"
+            className="rounded-2xl p-4 space-y-3"
             style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.06)' }}
           >
+            <p className="text-[12px] font-bold text-white/45 uppercase tracking-widest">Match Analysis</p>
             {coachingLoading ? (
               <div className="space-y-2">
                 {[1, 0.8, 0.6].map((w, i) => (
-                  <div
-                    key={i}
-                    className="h-2 rounded-full bg-white/[0.05]"
-                    style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }}
-                  />
+                  <div key={i} className="h-2 rounded-full bg-white/[0.05]"
+                    style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
                 ))}
               </div>
-            ) : coachingText ? (
-              <p className="text-sm text-white/60 leading-relaxed">{coachingText}</p>
+            ) : coachingText?.analysis ? (
+              <p className="text-sm text-white/70 leading-relaxed">{coachingText.analysis}</p>
             ) : coachingError === 'quota' ? (
-              <p className="text-xs text-white/30 leading-relaxed">
-                API quota exceeded — coaching will be available again tomorrow.
-              </p>
+              <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
             ) : (
-              <p className="text-xs text-white/20">Coaching unavailable.</p>
+              <p className="text-xs text-white/40">Analysis unavailable.</p>
+            )}
+          </div>
+
+          {/* Training Focus */}
+          <div
+            className="rounded-2xl p-4 space-y-3"
+            style={{ background: '#0d0d0d', border: '1px solid rgba(200,255,87,0.15)' }}
+          >
+            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest">Training Focus</p>
+            {coachingLoading ? (
+              <div className="space-y-2">
+                {[1, 0.75].map((w, i) => (
+                  <div key={i} className="h-2 rounded-full bg-white/[0.05]"
+                    style={{ width: `${w * 100}%`, animation: `pulse 1.5s ease-in-out ${i * 0.15}s infinite` }} />
+                ))}
+              </div>
+            ) : coachingText?.training ? (
+              <p className="text-sm text-white/70 leading-relaxed">{coachingText.training}</p>
+            ) : coachingError === 'quota' ? (
+              <p className="text-xs text-white/40">API quota exceeded — try again tomorrow.</p>
+            ) : (
+              <p className="text-xs text-white/40">Training advice unavailable.</p>
             )}
           </div>
 

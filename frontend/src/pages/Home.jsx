@@ -102,12 +102,25 @@ function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
   );
 }
 
+const TAG_LABELS = {
+  net_error:     'Net Error',
+  out_long:      'Out / Long',
+  swing_miss:    'Swing Miss',
+  bad_footwork:  'Bad Footwork',
+  late_reaction: 'Late Reaction',
+  weak_return:   'Weak Return',
+  serve_fault:   'Serve Fault',
+  forced_error:  'Forced Error',
+};
+
 function Home() {
   const navigate = useNavigate();
   const preferredSport = localStorage.getItem('preferred_sport');
   const isLoggedIn = !!(localStorage.getItem('token')) && localStorage.getItem('guest') !== 'true';
+  const userName = isLoggedIn ? (JSON.parse(localStorage.getItem('user') || '{}').name || '').split(' ')[0] : '';
   // step: 'sport' | 'mode' | 'action' | 'calibrate' | 'loading'
   const [step, setStep] = useState(preferredSport ? 'mode' : 'sport');
+  const [improvStat, setImprovStat] = useState(null);
   const [sport, setSport] = useState(preferredSport || null);
   const [mode, setMode] = useState(null); // 'form' | 'match'
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -148,6 +161,15 @@ function Home() {
       if (p?.catch) p.catch(() => {});
     }
   }, [cameraOpen]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const token = localStorage.getItem('token');
+    fetch(`${API_BASE}/improvement_stat`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.stat) setImprovStat(d.stat); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function selectSport(s) {
     setSport(s);
@@ -343,7 +365,7 @@ function Home() {
 
         {mode === 'match' && (
           <div className="w-full max-w-sm space-y-3">
-            <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest text-center">
+            <p className="text-[12px] font-semibold text-white/20 uppercase tracking-widest text-center">
               While we analyze · fill these in
             </p>
             <input
@@ -354,16 +376,22 @@ function Home() {
               className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
             />
-            <textarea
-              placeholder="How did the match feel? Any thoughts… (optional)"
-              value={matchComment}
-              onChange={e => setMatchComment(e.target.value)}
-              rows={3}
-              className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none resize-none"
-              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
-            />
             <div>
-              <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest mb-2 px-1">
+              <p className="text-xs text-white/60 mb-2 px-1 leading-relaxed">
+                Match notes — what went well, what didn't, how it felt overall.
+                The more you write, the more specific your AI feedback will be.
+              </p>
+              <textarea
+                placeholder="e.g. Kept losing rallies when pushed to the back. Serve was solid today."
+                value={matchComment}
+                onChange={e => setMatchComment(e.target.value)}
+                rows={3}
+                className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none resize-none"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+              />
+            </div>
+            <div>
+              <p className="text-[12px] font-semibold text-white/20 uppercase tracking-widest mb-2 px-1">
                 Final score (optional — improves rally detection)
               </p>
               <div className="flex items-center gap-3">
@@ -401,7 +429,7 @@ function Home() {
                 style={{ width: `${progressInfo.pct}%`, transition: 'width 0.5s ease-out' }}
               />
             </div>
-            <p className="text-right text-[11px] text-white/20 font-mono tabular-nums">{elapsedSec}s</p>
+            <p className="text-right text-[13px] text-white/20 font-mono tabular-nums">{elapsedSec}s</p>
           </div>
         )}
 
@@ -421,7 +449,7 @@ function Home() {
         {/* Back to splash */}
         <button
           onClick={() => navigate('/')}
-          className="absolute top-14 left-5 text-[11px] font-semibold text-white/20 uppercase tracking-widest"
+          className="absolute top-14 left-5 text-[13px] font-semibold text-white/20 uppercase tracking-widest"
         >
           Ace Vision
         </button>
@@ -485,15 +513,35 @@ function Home() {
         </div>
 
         <div className="w-full flex flex-col items-center">
-          <h2
-            className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
-            style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
-          >
-            What are<br />you filming?
-          </h2>
-          <p className="text-sm text-white/25 text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s' }}>
-            Choose how you want to analyze
-          </p>
+          {isLoggedIn && userName ? (
+            <>
+              <h2
+                className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
+                style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+              >
+                Hi, {userName}.
+              </h2>
+              <p className="text-sm text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s', color: improvStat ? '#C8FF57' : 'rgba(255,255,255,0.25)' }}>
+                {improvStat?.type === 'improvement'
+                  ? `${TAG_LABELS[improvStat.tag]} down ${improvStat.reduction_pct}% in recent matches.`
+                  : improvStat?.type === 'top_error'
+                  ? `${TAG_LABELS[improvStat.tag]} makes up ${improvStat.pct}% of your tagged losses.`
+                  : 'Choose how you want to analyze'}
+              </p>
+            </>
+          ) : (
+            <>
+              <h2
+                className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
+                style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+              >
+                What are<br />you filming?
+              </h2>
+              <p className="text-sm text-white/25 text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s' }}>
+                Choose how you want to analyze
+              </p>
+            </>
+          )}
 
           <div className="w-full flex flex-col items-center gap-4">
             {/* Form check */}
@@ -519,12 +567,6 @@ function Home() {
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-white font-semibold" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
                   Match
-                </span>
-                <span
-                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                  style={{ background: 'rgba(200,255,87,0.12)', color: '#C8FF57', letterSpacing: '0.06em' }}
-                >
-                  BETA
                 </span>
               </div>
               <div className="text-white/30 text-xs leading-relaxed">
@@ -564,7 +606,7 @@ function Home() {
               onClick={e => e.stopPropagation()}
             >
               <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-6" />
-              <p className="text-[10px] font-bold text-white/25 uppercase tracking-widest mb-4">
+              <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-4">
                 Your sport
               </p>
               <div className="flex gap-3">
@@ -644,10 +686,12 @@ function Home() {
           className="text-center text-[12px] font-medium mt-1 animate-fade-up-slow"
           style={{ animationDelay: '0.5s', lineHeight: '1.6', color: '#C8FF57' }}
         >
-          Film from directly behind yourself so your entire half of the court is visible.
+          {mode === 'form'
+            ? 'Set up the camera to your side. Make sure your full body is in frame, then swing away.'
+            : 'Film from directly behind yourself so your entire half of the court is visible. After every point, call out the score — yours first, then your opponent\'s. If someone is near the device, have them do it.'}
         </p>
         <p
-          className="text-center text-[11px] text-white/15 animate-fade-up-slow"
+          className="text-center text-[13px] text-white/15 animate-fade-up-slow"
           style={{ animationDelay: '0.6s' }}
         >
           MP4 · MOV · Max 200MB

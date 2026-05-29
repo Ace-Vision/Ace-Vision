@@ -22,7 +22,7 @@ function History() {
     <div className="min-h-screen bg-[#0a0a0a] pb-28">
 
       <div className="px-5 pt-16 pb-7">
-        <p className="text-[11px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
+        <p className="text-[13px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
         <h1 className="text-3xl font-bold text-white">History.</h1>
       </div>
 
@@ -35,7 +35,7 @@ function History() {
         ].map(s => (
           <div key={s.label} className="card p-4 text-center">
             <p className="text-2xl font-black text-white tabular-nums">{s.value}</p>
-            <p className="text-[10px] text-[#444] mt-1 font-semibold uppercase tracking-wider">{s.label}</p>
+            <p className="text-[12px] text-[#444] mt-1 font-semibold uppercase tracking-wider">{s.label}</p>
           </div>
         ))}
       </div>
