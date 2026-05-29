@@ -156,14 +156,54 @@ _GL_SYMBOLS = [
 ]
 
 
+def _find_libmediapipe() -> str | None:
+    """Locate libmediapipe.so inside the installed mediapipe package."""
+    try:
+        import mediapipe
+        base = os.path.dirname(mediapipe.__file__)
+        candidate = os.path.join(base, "tasks", "c", "libmediapipe.so")
+        if os.path.exists(candidate):
+            return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _undefined_gl_symbols() -> set:
+    """Extract undefined gl*/egl* symbols that libmediapipe.so requires."""
+    lib = _find_libmediapipe()
+    if not lib:
+        return set()
+    for cmd in (["nm", "-D", "--undefined-only", lib],
+                ["readelf", "-W", "--dyn-syms", lib]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True)
+            if out.returncode != 0:
+                continue
+            syms = set()
+            for line in out.stdout.splitlines():
+                parts = line.split()
+                for tok in parts:
+                    if tok.startswith(("gl", "egl")) and tok.replace("_", "").isalnum():
+                        syms.add(tok)
+            if syms:
+                return syms
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+    return set()
+
+
 def _compile_stub(path: str) -> bool:
     """Compile a shared library defining all GL/EGL symbols as no-ops."""
     src = path + ".c"
+    symbols = set(_GL_SYMBOLS) | _undefined_gl_symbols()
     try:
         with open(src, "w") as f:
             # Each entry point returns 0 (covers void / int / uint / pointer
             # returns on the x86_64 SysV ABI — the value is ignored for void).
-            for name in _GL_SYMBOLS:
+            for name in sorted(symbols):
                 f.write(f"long {name}(){{return 0;}}\n")
         result = subprocess.run(
             ["gcc", "-shared", "-fPIC", "-Wl,-soname,libGLESv2.so.2", "-o", path, src],
