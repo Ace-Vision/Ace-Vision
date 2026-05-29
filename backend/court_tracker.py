@@ -16,6 +16,7 @@ import math
 
 import cv2
 import numpy as np
+import backend.preload_gles  # must be before mediapipe.tasks
 import mediapipe as _mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
