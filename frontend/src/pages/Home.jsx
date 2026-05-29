@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactDOM from 'react-dom';
+import CourtCalibrator from '../components/CourtCalibrator';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -101,62 +102,207 @@ function CameraPortal({ videoRef, recording, onClose, onStart, onStop }) {
   );
 }
 
+const TAG_LABELS = {
+  net_error:     'Net Error',
+  out_long:      'Out / Long',
+  swing_miss:    'Swing Miss',
+  bad_footwork:  'Bad Footwork',
+  late_reaction: 'Late Reaction',
+  weak_return:   'Weak Return',
+  serve_fault:   'Serve Fault',
+  forced_error:  'Forced Error',
+};
+
 function Home() {
   const navigate = useNavigate();
-  // step: 'sport' | 'action' | 'loading'
-  const [step, setStep] = useState('sport');
-  const [sport, setSport] = useState(null);
+  const preferredSport = localStorage.getItem('preferred_sport');
+  const isLoggedIn = !!(localStorage.getItem('token')) && localStorage.getItem('guest') !== 'true';
+  const userName = isLoggedIn ? (JSON.parse(localStorage.getItem('user') || '{}').name || '').split(' ')[0] : '';
+  // step: 'sport' | 'mode' | 'action' | 'calibrate' | 'loading'
+  const [step, setStep] = useState(preferredSport ? 'mode' : 'sport');
+  const [improvStat, setImprovStat] = useState(null);
+  const [sport, setSport] = useState(preferredSport || null);
+  const [mode, setMode] = useState(null); // 'form' | 'match'
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState(null);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [, setCourtCorners] = useState(null);
+  const [opponentName, setOpponentName] = useState('');
+  const [matchComment, setMatchComment] = useState('');
+  const [finalMyScore,  setFinalMyScore]  = useState('');
+  const [finalOppScore, setFinalOppScore] = useState('');
+  const [progressInfo, setProgressInfo] = useState({ pct: 0, step: 'Preparing…' });
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
   const uploadInputRef = useRef(null);
+  const jobIdRef = useRef(null);
+  const pollRef = useRef(null);
+  const tickRef = useRef(null);
+  const startTimeRef = useRef(null);
+
+  // Refs so async uploadFile always reads the latest values (state would be stale in the closure)
+  const opponentNameRef = useRef('');
+  const matchCommentRef = useRef('');
+  useEffect(() => { opponentNameRef.current = opponentName; }, [opponentName]);
+  useEffect(() => { matchCommentRef.current = matchComment; }, [matchComment]);
 
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
+      const v = videoRef.current;
+      v.srcObject = streamRef.current;
+      // iOS Safari often needs an explicit play() after setting srcObject
+      const p = v.play();
+      if (p?.catch) p.catch(() => {});
     }
   }, [cameraOpen]);
 
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const token = localStorage.getItem('token');
+    fetch(`${API_BASE}/improvement_stat`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.stat) setImprovStat(d.stat); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function selectSport(s) {
     setSport(s);
+    if (isLoggedIn) localStorage.setItem('preferred_sport', s);
+    setStep('mode');
+  }
+
+  function changeSport(s) {
+    setSport(s);
+    localStorage.setItem('preferred_sport', s);
+    setSettingsOpen(false);
+  }
+
+  function selectMode(m) {
+    setMode(m);
     setStep('action');
   }
 
-  async function uploadFile(file) {
+  function handleFileSelected(file) {
+    if (mode === 'match') {
+      setPendingFile(file);
+      setStep('calibrate');
+    } else {
+      uploadFile(file);
+    }
+  }
+
+  async function uploadFile(file, corners = null) {
     setCameraOpen(false);
     setStep('loading');
     setError(null);
+    setProgressInfo({ pct: 0, step: 'Preparing…' });
+    setElapsedSec(0);
+
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    jobIdRef.current = jobId;
+    startTimeRef.current = Date.now();
+
+    if (mode === 'match') {
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/progress/${jobId}`);
+          if (r.ok) setProgressInfo(await r.json());
+        } catch {}
+      }, 700);
+      tickRef.current = setInterval(() => {
+        setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 1000);
+    }
+
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('sport_type', sport);
-      formData.append('skill_level', 'intermediate');
-      const res = await fetch(`${API_BASE}/analyse`, { method: 'POST', body: formData });
+
+      let endpoint, dest;
+      if (mode === 'match') {
+        endpoint = '/analyse_movement';
+        dest     = '/movement-result';
+        formData.append('sport_type', sport);
+        formData.append('job_id', jobId);
+        if (corners) formData.append('court_corners', JSON.stringify(corners));
+        if (finalMyScore !== '' && finalOppScore !== '') {
+          formData.append('final_my_score',  finalMyScore);
+          formData.append('final_opp_score', finalOppScore);
+        }
+      } else {
+        endpoint = '/analyse';
+        dest     = '/result';
+        formData.append('sport_type', sport);
+        formData.append('skill_level', 'intermediate');
+      }
+
+      const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail.detail || `Server error ${res.status}`);
       }
       const result = await res.json();
-      navigate('/result', { state: { result, sport } });
+
+      if (mode === 'match') {
+        const token = localStorage.getItem('token');
+        if (token) {
+          fetch(`${API_BASE}/match_sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              session_id:    result.session_id,
+              sport_type:    sport,
+              opponent_name: opponentNameRef.current || null,
+              match_comment: matchCommentRef.current || null,
+              rallies:       result.rallies || [],
+              rally_summary: result.rally_summary || {},
+              phase_analysis: result.phase_analysis || null,
+            }),
+          }).then(r => { if (!r.ok) console.warn('[AceVision] match save failed', r.status); })
+            .catch(e => console.warn('[AceVision] match save error', e));
+        }
+      }
+
+      navigate(dest, { state: { result, sport, mode, file, opponentName: opponentNameRef.current, matchComment: matchCommentRef.current } });
     } catch (err) {
       setError(err.message);
       setStep('action');
+    } finally {
+      clearInterval(pollRef.current);
+      clearInterval(tickRef.current);
     }
   }
 
   async function openCamera() {
     setError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('This browser does not support camera access, or the page is not served over HTTPS.');
+      return;
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      let stream;
+      try {
+        // Prefer the rear camera (mobile)
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      } catch {
+        // Fall back to any available camera (desktop webcam, front camera)
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
       streamRef.current = stream;
       setCameraOpen(true);
     } catch (err) {
-      setError('카메라 접근 오류: ' + err.message);
+      const msg = err?.name === 'NotAllowedError'
+        ? 'Camera permission was denied. Allow it in your browser settings and try again.'
+        : err?.name === 'NotFoundError'
+        ? 'No camera was found on this device.'
+        : 'Camera error: ' + (err?.message || err);
+      setError(msg);
     }
   }
 
@@ -176,7 +322,7 @@ function Home() {
       streamRef.current = null;
       setCameraOpen(false);
       setRecording(false);
-      await uploadFile(new File([blob], `recording.${ext}`, { type: mimeType }));
+      handleFileSelected(new File([blob], `recording.${ext}`, { type: mimeType }));
     };
     recorder.start();
     mediaRecorderRef.current = recorder;
@@ -194,29 +340,101 @@ function Home() {
     setRecording(false);
   }
 
+  // ── Court calibration ───────────────────────────────────────
+  if (step === 'calibrate' && pendingFile) {
+    return (
+      <CourtCalibrator
+        videoFile={pendingFile}
+        onConfirm={(corners) => {
+          setCourtCorners(corners);
+          uploadFile(pendingFile, corners);
+        }}
+        onBack={() => { setPendingFile(null); setStep('action'); }}
+      />
+    );
+  }
+
   // ── Loading screen ──────────────────────────────────────────
   if (step === 'loading') {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-8">
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-8 px-6">
         <div className="flex flex-col items-center">
-          <h1
-            className="text-[44px] font-bold text-white leading-none"
-            style={{ letterSpacing: '-0.03em' }}
-          >
-            ACE
-          </h1>
-          <h1
-            className="text-[44px] font-bold leading-none"
-            style={{ letterSpacing: '-0.03em', color: '#C8FF57' }}
-          >
-            VISION
-          </h1>
+          <h1 className="text-[44px] font-bold text-white leading-none" style={{ letterSpacing: '-0.03em' }}>ACE</h1>
+          <h1 className="text-[44px] font-bold leading-none" style={{ letterSpacing: '-0.03em', color: '#C8FF57' }}>VISION</h1>
         </div>
+
+        {mode === 'match' && (
+          <div className="w-full max-w-sm space-y-3">
+            <p className="text-[12px] font-semibold text-white/20 uppercase tracking-widest text-center">
+              While we analyze · fill these in
+            </p>
+            <input
+              type="text"
+              placeholder="Opponent's name (optional)"
+              value={opponentName}
+              onChange={e => setOpponentName(e.target.value)}
+              className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            />
+            <div>
+              <p className="text-xs text-white/60 mb-2 px-1 leading-relaxed">
+                Match notes — what went well, what didn't, how it felt overall.
+                The more you write, the more specific your AI feedback will be.
+              </p>
+              <textarea
+                placeholder="e.g. Kept losing rallies when pushed to the back. Serve was solid today."
+                value={matchComment}
+                onChange={e => setMatchComment(e.target.value)}
+                rows={3}
+                className="w-full px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none resize-none"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+              />
+            </div>
+            <div>
+              <p className="text-[12px] font-semibold text-white/20 uppercase tracking-widest mb-2 px-1">
+                Final score (optional — improves rally detection)
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number" min="0" max="30"
+                  placeholder="You"
+                  value={finalMyScore}
+                  onChange={e => setFinalMyScore(e.target.value)}
+                  className="flex-1 px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none text-center tabular-nums"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                />
+                <span className="text-white/20 text-lg font-light">—</span>
+                <input
+                  type="number" min="0" max="30"
+                  placeholder="Them"
+                  value={finalOppScore}
+                  onChange={e => setFinalOppScore(e.target.value)}
+                  className="flex-1 px-4 py-3 rounded-2xl text-sm text-white placeholder:text-white/20 outline-none text-center tabular-nums"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mode === 'match' && (
+          <div className="w-full max-w-sm space-y-2">
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs text-white/40 truncate">{progressInfo.step}</span>
+              <span className="text-xs font-mono text-white/60 shrink-0 tabular-nums">{progressInfo.pct}%</span>
+            </div>
+            <div className="w-full h-[3px] bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[#C8FF57] rounded-full"
+                style={{ width: `${progressInfo.pct}%`, transition: 'width 0.5s ease-out' }}
+              />
+            </div>
+            <p className="text-right text-[13px] text-white/20 font-mono tabular-nums">{elapsedSec}s</p>
+          </div>
+        )}
+
         <div className="flex flex-col items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-full border-2 border-white/10 border-t-[#C8FF57]"
-            style={{ animation: 'spin 1s linear infinite' }}
-          />
+          <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-[#C8FF57]" style={{ animation: 'spin 1s linear infinite' }} />
           <p className="text-xs font-medium text-white/30 tracking-widest uppercase">Analyzing</p>
         </div>
         {error && <p className="text-sm text-red-400 px-6 text-center">{error}</p>}
@@ -231,7 +449,7 @@ function Home() {
         {/* Back to splash */}
         <button
           onClick={() => navigate('/')}
-          className="absolute top-14 left-5 text-[11px] font-semibold text-white/20 uppercase tracking-widest"
+          className="absolute top-14 left-5 text-[13px] font-semibold text-white/20 uppercase tracking-widest"
         >
           Ace Vision
         </button>
@@ -265,16 +483,174 @@ function Home() {
     );
   }
 
+  // ── Mode selector ───────────────────────────────────────────
+  if (step === 'mode') {
+    const isGuest = localStorage.getItem('guest') === 'true';
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-8">
+        <div className="px-5 pt-14 pb-6 flex items-center justify-between absolute top-0 left-0 right-0 animate-fade-up-slow">
+          <div className="flex items-center gap-3">
+            {!isLoggedIn && (
+              <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+                ‹
+              </button>
+            )}
+            <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+              {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+            </span>
+          </div>
+          {isLoggedIn && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="text-white/25 hover:text-white/50 transition-colors p-1"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div className="w-full flex flex-col items-center">
+          {isLoggedIn && userName ? (
+            <>
+              <h2
+                className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
+                style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+              >
+                Hi, {userName}.
+              </h2>
+              <p className="text-sm text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s', color: improvStat ? '#C8FF57' : 'rgba(255,255,255,0.25)' }}>
+                {improvStat?.type === 'improvement'
+                  ? `${TAG_LABELS[improvStat.tag]} down ${improvStat.reduction_pct}% in recent matches.`
+                  : improvStat?.type === 'top_error'
+                  ? `${TAG_LABELS[improvStat.tag]} makes up ${improvStat.pct}% of your tagged losses.`
+                  : 'Choose how you want to analyze'}
+              </p>
+            </>
+          ) : (
+            <>
+              <h2
+                className="text-[36px] font-bold text-white text-center leading-tight mb-4 animate-fade-up-slow"
+                style={{ letterSpacing: '-0.02em', animationDelay: '0.1s' }}
+              >
+                What are<br />you filming?
+              </h2>
+              <p className="text-sm text-white/25 text-center mb-14 animate-fade-up-slow" style={{ animationDelay: '0.2s' }}>
+                Choose how you want to analyze
+              </p>
+            </>
+          )}
+
+          <div className="w-full flex flex-col items-center gap-4">
+            {/* Form check */}
+            <button
+              onClick={() => selectMode('form')}
+              className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ animationDelay: '0.4s' }}
+            >
+              <div className="text-white font-semibold mb-1" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                Solo Swing
+              </div>
+              <div className="text-white/30 text-xs leading-relaxed">
+                Shadow swing or practice drill.<br />Analyzes your form in detail.
+              </div>
+            </button>
+
+            {/* Match analysis */}
+            <button
+              onClick={() => selectMode('match')}
+              className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+              style={{ animationDelay: '0.6s' }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-white font-semibold" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                  Match
+                </span>
+              </div>
+              <div className="text-white/30 text-xs leading-relaxed">
+                Up to 5 min match footage.<br />Detects shots and finds trends.
+              </div>
+            </button>
+
+            {/* Training — only for logged-in users */}
+            {!isGuest && (
+              <button
+                onClick={() => navigate('/insights')}
+                className="w-full max-w-[300px] py-6 px-6 rounded-2xl bg-[#111] border border-[#2a2a2a] text-left hover:bg-[#181818] hover:border-white/20 active:scale-95 transition-all animate-fade-up-slow"
+                style={{ animationDelay: '0.75s' }}
+              >
+                <div className="text-white font-semibold mb-1" style={{ fontSize: '16px', letterSpacing: '0.02em' }}>
+                  Insights
+                </div>
+                <div className="text-white/30 text-xs leading-relaxed">
+                  Trends, history and opponent notes.
+                </div>
+              </button>
+            )}
+
+          </div>
+        </div>
+
+        {/* Settings sheet */}
+        {settingsOpen && (
+          <div
+            className="fixed inset-0 z-50 flex flex-col justify-end"
+            style={{ background: 'rgba(0,0,0,0.65)' }}
+            onClick={() => setSettingsOpen(false)}
+          >
+            <div
+              className="rounded-t-3xl px-6 pt-5 pb-12"
+              style={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-6" />
+              <p className="text-[12px] font-bold text-white/25 uppercase tracking-widest mb-4">
+                Your sport
+              </p>
+              <div className="flex gap-3">
+                {[{ value: 'badminton', label: 'Badminton' }, { value: 'tennis_serve', label: 'Tennis' }].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => changeSport(value)}
+                    className="flex-1 py-4 rounded-2xl text-sm font-semibold transition-all active:scale-95"
+                    style={
+                      sport === value
+                        ? { background: '#C8FF57', color: '#000' }
+                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
   // ── Action screen (upload / record) ────────────────────────
   return (
     <div className="min-h-screen bg-black flex flex-col">
       {/* Header */}
       <div className="px-5 pt-14 pb-6 flex items-center gap-3 animate-fade-up-slow">
-        <button onClick={() => setStep('sport')} className="text-white/25 text-2xl leading-none">
+        <button onClick={() => setStep('mode')} className="text-white/25 text-2xl leading-none">
           ‹
         </button>
-        <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
-          {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+        {mode !== 'score' && (
+          <>
+            <span className="text-sm font-medium text-white/30" style={{ letterSpacing: '0.02em' }}>
+              {sport === 'badminton' ? 'Badminton' : 'Tennis'}
+            </span>
+            <span className="text-white/15 text-sm">·</span>
+          </>
+        )}
+        <span className="text-sm font-medium text-white/20" style={{ letterSpacing: '0.02em' }}>
+          {mode === 'form' ? 'Solo Swing' : 'Match'}
         </span>
       </div>
 
@@ -294,7 +670,7 @@ function Home() {
           type="file"
           accept="video/mp4,video/quicktime,video/webm"
           className="hidden"
-          onChange={e => { const f = e.target.files[0]; if (f) uploadFile(f); }}
+          onChange={e => { const f = e.target.files[0]; if (f) handleFileSelected(f); }}
         />
 
         {/* Record Video */}
@@ -307,8 +683,16 @@ function Home() {
         </button>
 
         <p
-          className="text-center text-[11px] text-white/15 mt-1 animate-fade-up-slow"
-          style={{ animationDelay: '0.5s' }}
+          className="text-center text-[12px] font-medium mt-1 animate-fade-up-slow"
+          style={{ animationDelay: '0.5s', lineHeight: '1.6', color: '#C8FF57' }}
+        >
+          {mode === 'form'
+            ? 'Set up the camera to your side. Make sure your full body is in frame, then swing away.'
+            : 'Film from directly behind yourself so your entire half of the court is visible. After every point, call out the score — yours first, then your opponent\'s. If someone is near the device, have them do it.'}
+        </p>
+        <p
+          className="text-center text-[13px] text-white/15 animate-fade-up-slow"
+          style={{ animationDelay: '0.6s' }}
         >
           MP4 · MOV · Max 200MB
         </p>

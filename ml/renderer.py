@@ -100,10 +100,20 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
         'wrist_extension': 'right_wrist'
     }
 
+    sw = (deviation_scores or {}).get("swing_window")
+    win_start = sw[0] if sw else 0
+    win_end   = sw[1] if sw else frame_count - 1
+
     frame_num = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
+            break
+
+        if frame_num < win_start:
+            frame_num += 1
+            continue
+        if frame_num > win_end:
             break
 
         kp = keypoints_list[frame_num] if frame_num < len(keypoints_list) else {}

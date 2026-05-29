@@ -116,7 +116,7 @@ export default function Advice() {
         >
           ‹
         </button>
-        <span className="text-[11px] font-semibold text-white/25 uppercase tracking-widest">
+        <span className="text-[13px] font-semibold text-white/25 uppercase tracking-widest">
           Advice
         </span>
       </div>
@@ -125,7 +125,7 @@ export default function Advice() {
 
         {/* User video */}
         <div>
-          <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-2">
+          <p className="text-[12px] font-semibold text-white/25 uppercase tracking-widest mb-2">
             Your Motion
           </p>
           <div className="rounded-2xl overflow-hidden bg-[#111]">
@@ -147,7 +147,7 @@ export default function Advice() {
             <div className="flex items-center gap-2">
               <span className="text-xl">{pattern.icon}</span>
               <div>
-                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">
+                <p className="text-[12px] font-semibold text-white/30 uppercase tracking-widest">
                   Pattern {patternId} of 5
                 </p>
                 <p className="text-base font-bold text-white leading-tight">
@@ -167,7 +167,7 @@ export default function Advice() {
             className="rounded-2xl p-4 space-y-2"
             style={{ background: '#0f0f0f', border: '1px solid rgba(255,255,255,0.07)' }}
           >
-            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">
+            <p className="text-[12px] font-semibold text-white/30 uppercase tracking-widest mb-1">
               Where it shows up
             </p>
 
@@ -188,7 +188,7 @@ export default function Advice() {
 
             {/* Deviation bar */}
             <div className="mt-2">
-              <div className="flex justify-between text-[10px] text-white/25 mb-1">
+              <div className="flex justify-between text-[12px] text-white/25 mb-1">
                 <span>Deviation</span>
                 <span>{jointDev.deviation_deg?.toFixed(1)}° off</span>
               </div>
@@ -212,7 +212,7 @@ export default function Advice() {
 
         {/* Pro reference video */}
         <div>
-          <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-2">
+          <p className="text-[12px] font-semibold text-white/25 uppercase tracking-widest mb-2">
             Pro Reference
           </p>
           <div className="rounded-2xl overflow-hidden bg-[#111]">
@@ -222,7 +222,7 @@ export default function Advice() {
               className="w-full"
             />
           </div>
-          <p className="text-[10px] text-white/20 mt-2 text-center">
+          <p className="text-[12px] text-white/20 mt-2 text-center">
             Compare your motion above to the reference below
           </p>
         </div>
@@ -233,7 +233,7 @@ export default function Advice() {
             className="rounded-2xl p-4"
             style={{ background: '#0f0f0f', border: '1px solid rgba(255,255,255,0.07)' }}
           >
-            <p className="text-[10px] font-bold text-[#C8FF57] uppercase tracking-widest mb-2">
+            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-2">
               AI Coach
             </p>
             <p className="text-sm text-white/50 leading-relaxed">{coaching.advice}</p>

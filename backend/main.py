@@ -33,15 +33,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 
 from backend.schemas import (
-    AnalyseResponse, UserCreate, UserRead, SessionRead,
+    AnalyseResponse, MatchAnalyseResponse, UserCreate, UserRead, SessionRead,
     UserRegister, UserLogin, TokenResponse,
 )
-from backend import pipeline, vlm, db, vector_db
-from backend.upload_validation import validate_upload_metadata, validate_video_duration, MAX_BYTES
-from backend.adaptive import get_recurring_issues
+from backend import pipeline, vlm, db, court_tracker, score_recognizer
 from ml import renderer
 
 logger = logging.getLogger(__name__)
@@ -50,7 +48,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -58,53 +55,18 @@ if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 gemini = vlm.gemini_model(API_KEY)
 
-_FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    db.init_db()
-    yield
-
-
-app = FastAPI(title="Ace Vision API", lifespan=lifespan)
+app = FastAPI(title="Ace Vision API")
+_progress: dict[str, dict] = {}
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 if os.path.isdir(_FRONTEND_BUILD):
     app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
 
 
-def backfill_vector_db() -> None:
-    """Index any AnalysisSession rows not yet present in the vector DB."""
-    vdb = vector_db.get_vlm_vector_db()
-    sqlite_db = db.SessionLocal()
-    try:
-        sessions = (
-            sqlite_db.query(db.AnalysisSession)
-            .filter(db.AnalysisSession.coaching_feedback.isnot(None))
-            .all()
-        )
-        new_entries = 0
-        for session in sessions:
-            if session.id in vdb._indexed_session_ids:
-                continue
-            coaching = session.coaching_feedback
-            coaching_text = coaching.get("advice", str(coaching)) if isinstance(coaching, dict) else str(coaching)
-            joint_scores = {dev.joint_name: dev.severity_score for dev in session.deviations}
-            joint_scores["overall"] = float(session.overall_score)
-            vdb.add_vlm_output(
-                vlm_feedback=coaching_text,
-                scores=joint_scores,
-                session_id=session.id,
-                sport=session.sport_type,
-                user_id=session.user_id,
-            )
-            new_entries += 1
-        if new_entries:
-            vector_db.save_vlm_vector_db()
-            print(f"Vector DB: backfilled {new_entries} session(s).")
-    finally:
-        sqlite_db.close()
+@app.get("/progress/{job_id}")
+async def get_progress(job_id: str):
+    return _progress.get(job_id, {"pct": 0, "step": "Queued…", "done": False})
+
 
 @app.on_event("startup")
 def startup_event():
@@ -118,10 +80,10 @@ def shutdown_event():
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
 
 def create_access_token(data: dict) -> str:
     payload = data.copy()
@@ -133,7 +95,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), sqlite_db: Session = D
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = int(sub)
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
@@ -172,7 +137,7 @@ def register(body: UserRegister, sqlite_db: Session = Depends(db.get_db)):
         hashed_password=hash_password(body.password), skill_level=body.skill_level,
     )
     sqlite_db.add(user); sqlite_db.commit(); sqlite_db.refresh(user)
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -180,7 +145,7 @@ def login(body: UserLogin, sqlite_db: Session = Depends(db.get_db)):
     user = sqlite_db.query(db.User).filter(db.User.email == body.email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
 
 @app.get("/auth/me", response_model=UserRead)
@@ -351,6 +316,571 @@ async def analyse(
     )
 
 
+@app.post("/analyse_match", response_model=MatchAnalyseResponse)
+async def analyse_match(
+    file: UploadFile = File(...),
+    sport_type: str = Form(...),
+):
+    if sport_type not in ("badminton", "tennis_serve"):
+        raise HTTPException(status_code=422, detail="sport_type must be badminton or tennis_serve")
+
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = await asyncio.to_thread(pipeline.run_match_pipeline, tmp_path, sport_type)
+    except Exception as exc:
+        os.unlink(tmp_path)
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    coaching = None
+    if result["clip_paths"]:
+        coaching = await asyncio.to_thread(
+            gemini.get_match_coaching,
+            result["clip_paths"], sport_type,
+        )
+
+    clip_filenames = [os.path.basename(p) for p in result["clip_paths"]]
+
+    return MatchAnalyseResponse(
+        session_id=result["session_id"],
+        sport_type=sport_type,
+        shot_count=result["shot_count"],
+        shots=result["shots"],
+        clip_filenames=clip_filenames,
+        coaching=coaching,
+    )
+
+
+@app.get("/clips/{session_id}/{filename}")
+async def get_clip(session_id: str, filename: str):
+    path = os.path.join("data", "results", session_id, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/analyse_movement")
+async def analyse_movement(
+    file: UploadFile = File(...),
+    sport_type: str = Form("badminton"),
+    court_corners: str = Form(...),
+    final_my_score:  Optional[int] = Form(None),
+    final_opp_score: Optional[int] = Form(None),
+    job_id: Optional[str] = Form(None),
+):
+    import json
+    try:
+        corners = json.loads(court_corners)
+    except Exception:
+        raise HTTPException(status_code=422, detail="court_corners must be valid JSON")
+    if len(corners) != 4:
+        raise HTTPException(status_code=422, detail="court_corners must have exactly 4 points")
+
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    import time as _time
+
+    def _update(pct: int, step: str):
+        if job_id:
+            _progress[job_id] = {"pct": pct, "step": step, "done": pct >= 100}
+
+    _update(2, "Received video…")
+
+    # 1) Court movement analysis
+    _t0 = _time.perf_counter()
+    try:
+        court_result = await asyncio.to_thread(
+            court_tracker.run_court_analysis, tmp_path, corners, _update
+        )
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=str(exc))
+    print(f"[timing] run_court_analysis total: {_time.perf_counter()-_t0:.1f}s")
+
+    session_id = court_result["session_id"]
+
+    # 2) Score recognition — movement result is returned even if this fails
+    _t1 = _time.perf_counter()
+    try:
+        final_score = (final_my_score, final_opp_score) if final_my_score is not None and final_opp_score is not None else None
+        score_result = await asyncio.to_thread(
+            score_recognizer.run_score_analysis, tmp_path, "tiny", "en", session_id, final_score,
+            court_result.get("match_start_s"), _update,
+        )
+        rallies       = score_result["rallies"]
+        rally_summary = score_result["summary"]
+    except Exception:
+        import traceback; traceback.print_exc()
+        rallies       = []
+        rally_summary = {"user_wins": 0, "opponent_wins": 0, "total_rallies": 0}
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    print(f"[timing] run_score_analysis total: {_time.perf_counter()-_t1:.1f}s")
+
+    # 3) Heatmap — other results are returned even if this fails
+    _update(90, "Generating heatmaps…")
+    _t2 = _time.perf_counter()
+    try:
+        await asyncio.to_thread(
+            court_tracker.generate_heatmap,
+            court_result["_positions"],
+            court_result["_H"],
+            court_result["_video_w"],
+            court_result["_video_h"],
+            court_result["_fps"],
+            rallies,
+            session_id,
+        )
+    except Exception:
+        import traceback; traceback.print_exc()
+    print(f"[timing] generate_heatmap total: {_time.perf_counter()-_t2:.1f}s")
+    _update(100, "Done")
+
+    return {
+        "session_id":      session_id,
+        "sport_type":      sport_type,
+        "total_positions": court_result["total_positions"],
+        "duration_s":      court_result["duration_s"],
+        "rallies":         rallies,
+        "rally_summary":   rally_summary,
+        "phase_analysis":  court_result.get("phase_analysis"),
+    }
+
+
+@app.get("/phase_heatmap/{session_id}/{phase_num}")
+async def get_phase_heatmap(session_id: str, phase_num: int):
+    if phase_num not in (1, 2, 3):
+        raise HTTPException(status_code=422, detail="phase_num must be 1, 2, or 3")
+    path = os.path.join("data", "results", session_id, f"heatmap_phase_{phase_num}.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Phase heatmap not found")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.get("/movement/{session_id}")
+async def get_movement_video(session_id: str):
+    path = os.path.join("data", "results", session_id, "movement.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Movement video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+@app.get("/heatmap/{session_id}/{which}")
+async def get_heatmap(session_id: str, which: str):
+    if which not in ("win", "loss"):
+        raise HTTPException(status_code=422, detail="which must be 'win' or 'loss'")
+    path = os.path.join("data", "results", session_id, f"heatmap_{which}.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Heatmap not found")
+    return FileResponse(path, media_type="image/png")
+
+@app.get("/debug/{session_id}")
+async def get_debug_video(session_id: str):
+    path = os.path.join("data", "results", session_id, "debug.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Debug video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+@app.get("/court_positions/{session_id}")
+async def get_court_positions(session_id: str):
+    import json as _json
+    path = os.path.join("data", "results", session_id, "positions.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Position data not found")
+    with open(path) as f:
+        return _json.load(f)
+
+@app.post("/rally_coaching")
+async def get_rally_coaching(body: dict):
+    import json as _json
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="session_id required")
+
+    # Return cached feedback if available
+    cache_path = os.path.join("data", "results", session_id, "coaching.json")
+    if os.path.exists(cache_path):
+        with open(cache_path) as f:
+            return _json.load(f)
+
+    try:
+        feedback = await asyncio.to_thread(gemini.get_rally_coaching, body)
+    except Exception as exc:
+        err = str(exc)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            raise HTTPException(status_code=429, detail="quota_exceeded")
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+
+    if feedback is None:
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+
+    os.makedirs(os.path.join("data", "results", session_id), exist_ok=True)
+    with open(cache_path, "w") as f:
+        _json.dump(feedback, f)
+    return feedback
+
+
+@app.post("/analyse_score")
+async def analyse_score(
+    file: UploadFile = File(...),
+    model_size: str = Form("medium"),
+    language: str = Form("en"),
+):
+    """
+    Recognise scores from a video and return per-rally clips.
+
+    Returns:
+        { session_id, rallies: [{index, start_s, end_s, my_score, opponent_score,
+                                 rally_winner, clip_filename}], summary }
+    """
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = await asyncio.to_thread(
+            score_recognizer.run_score_analysis,
+            tmp_path, model_size, language,
+        )
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return result
+
+
+@app.get("/rally_clip/{session_id}/{filename}")
+async def get_rally_clip(session_id: str, filename: str):
+    path = os.path.join("data", "results", session_id, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/rally_label")
+async def set_rally_label(body: dict):
+    import json as _json
+    session_id  = body.get("session_id")
+    rally_index = body.get("rally_index")
+    label       = body.get("label")
+
+    if not session_id or rally_index is None:
+        raise HTTPException(status_code=422, detail="session_id and rally_index required")
+
+    labels_path = os.path.join("data", "results", session_id, "labels.json")
+    labels: dict = {}
+    if os.path.exists(labels_path):
+        with open(labels_path) as f:
+            labels = _json.load(f)
+
+    if label is None:
+        labels.pop(str(rally_index), None)
+    else:
+        labels[str(rally_index)] = label
+
+    with open(labels_path, "w") as f:
+        _json.dump(labels, f)
+
+    return {"ok": True}
+
+
+@app.get("/rally_labels/{session_id}")
+async def get_rally_labels(session_id: str):
+    import json as _json
+    labels_path = os.path.join("data", "results", session_id, "labels.json")
+    if not os.path.exists(labels_path):
+        return {"labels": {}}
+    with open(labels_path) as f:
+        return {"labels": _json.load(f)}
+
+
+@app.post("/recognise_scores")
+async def recognise_scores(
+    file: UploadFile = File(...),
+    model_size: str = Form("medium"),
+    language: str = Form("en"),
+    include_transcript: bool = Form(False),
+):
+    """
+    Recognise spoken scores from a video and return rally winners.
+
+    Returns:
+        {
+            "rallies": [{"timestamp", "my_score", "opponent_score", "rally_winner"}, ...],
+            "summary": {"user_wins", "opponent_wins", "total_rallies"},
+            "segments": [...],   # only when include_transcript=True
+        }
+    """
+    suffix = os.path.splitext(file.filename)[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        if include_transcript:
+            result = await asyncio.to_thread(
+                score_recognizer.recognize_scores_with_transcript,
+                tmp_path, model_size, language,
+            )
+        else:
+            scores = await asyncio.to_thread(
+                score_recognizer.recognize_scores,
+                tmp_path, model_size, language,
+            )
+            result = {"scores": scores}
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return result
+
+
+@app.post("/match_sessions", status_code=201)
+def save_match_session(body: dict, current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="session_id required")
+    if sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first():
+        return {"ok": True, "session_id": session_id}
+
+    rallies = body.get("rallies") or []
+    rally_summary = body.get("rally_summary") or {}
+    last_rally = rallies[-1] if rallies else None
+    my_score  = last_rally.get("my_score")       if last_rally else rally_summary.get("user_wins", 0)
+    opp_score = last_rally.get("opponent_score")  if last_rally else rally_summary.get("opponent_wins", 0)
+
+    sqlite_db.add(db.MatchSession(
+        id=session_id,
+        user_id=current_user.id,
+        sport_type=body.get("sport_type", "badminton"),
+        opponent_name=body.get("opponent_name") or None,
+        match_comment=body.get("match_comment") or None,
+        my_score=my_score,
+        opp_score=opp_score,
+        rallies=rallies,
+        rally_summary=rally_summary,
+        phase_analysis=body.get("phase_analysis"),
+    ))
+    sqlite_db.commit()
+    return {"ok": True, "session_id": session_id}
+
+
+@app.patch("/match_sessions/{session_id}")
+def update_match_session(session_id: str, body: dict, sqlite_db: Session = Depends(db.get_db)):
+    ms = sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first()
+    if not ms:
+        raise HTTPException(status_code=404, detail="Match session not found")
+    if "opponent_name" in body:
+        ms.opponent_name = body["opponent_name"] or None
+    if "match_comment" in body:
+        ms.match_comment = body["match_comment"] or None
+    sqlite_db.commit()
+    return {"ok": True}
+
+
+@app.get("/match_sessions/{session_id}")
+def get_match_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
+    ms = sqlite_db.query(db.MatchSession).filter(db.MatchSession.id == session_id).first()
+    if not ms:
+        raise HTTPException(status_code=404, detail="Match session not found")
+    return {
+        "session_id":   ms.id,
+        "sport_type":   ms.sport_type,
+        "opponent_name": ms.opponent_name,
+        "match_comment": ms.match_comment,
+        "my_score":     ms.my_score,
+        "opp_score":    ms.opp_score,
+        "rallies":      ms.rallies or [],
+        "rally_summary": ms.rally_summary or {},
+        "phase_analysis": ms.phase_analysis,
+        "created_at":   ms.created_at.isoformat(),
+    }
+
+
+@app.get("/improvement_stat")
+def get_improvement_stat(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    import json as _json
+    from collections import defaultdict
+
+    VALID_TAGS = {"net_error", "out_long", "swing_miss", "bad_footwork", "late_reaction", "weak_return", "serve_fault", "forced_error"}
+
+    sessions = (
+        sqlite_db.query(db.MatchSession)
+        .filter(db.MatchSession.user_id == current_user.id)
+        .order_by(db.MatchSession.created_at)  # oldest first
+        .all()
+    )
+
+    labeled = []
+    for ms in sessions:
+        path = os.path.join("data", "results", ms.id, "labels.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                raw = _json.load(f)
+        except Exception:
+            continue
+        counts: dict[str, int] = defaultdict(int)
+        for v in raw.values():
+            if v in VALID_TAGS:
+                counts[v] += 1
+        if sum(counts.values()) > 0:
+            labeled.append(dict(counts))
+
+    if len(labeled) < 4:
+        return {"stat": None}
+
+    mid = len(labeled) // 2
+    older, newer = labeled[:mid], labeled[mid:]
+    older_total = sum(sum(s.values()) for s in older)
+    newer_total = sum(sum(s.values()) for s in newer)
+
+    if older_total == 0 or newer_total == 0:
+        return {"stat": None}
+
+    best_tag, best_reduction = None, 0.0
+    for tag in VALID_TAGS:
+        older_rate = sum(s.get(tag, 0) for s in older) / older_total
+        newer_rate = sum(s.get(tag, 0) for s in newer) / newer_total
+        if older_rate >= 0.05:  # was a real problem before
+            reduction = (older_rate - newer_rate) / older_rate
+            if reduction > best_reduction:
+                best_reduction = reduction
+                best_tag = tag
+
+    if best_tag is not None and best_reduction >= 0.10:
+        return {"stat": {"type": "improvement", "tag": best_tag, "reduction_pct": round(best_reduction * 100)}}
+
+    # Fallback: return the single most frequent error across all sessions
+    all_counts: dict[str, int] = defaultdict(int)
+    for s in labeled:
+        for tag, n in s.items():
+            all_counts[tag] += n
+    grand_total = sum(all_counts.values())
+    if grand_total == 0:
+        return {"stat": None}
+    top_tag = max(all_counts, key=lambda t: all_counts[t])
+    top_pct  = round(all_counts[top_tag] / grand_total * 100)
+    return {"stat": {"type": "top_error", "tag": top_tag, "pct": top_pct}}
+
+
+@app.get("/users/me/match_history")
+def get_my_match_history(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+    sessions = (
+        sqlite_db.query(db.MatchSession)
+        .filter(db.MatchSession.user_id == current_user.id)
+        .order_by(db.MatchSession.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "session_id":    ms.id,
+            "sport_type":    ms.sport_type,
+            "opponent_name": ms.opponent_name,
+            "match_comment": ms.match_comment,
+            "my_score":      ms.my_score,
+            "opp_score":     ms.opp_score,
+            "created_at":    ms.created_at.isoformat(),
+        }
+        for ms in sessions
+    ]
+
+
+@app.get("/combined_heatmap")
+async def combined_heatmap(sessions: str):
+    """
+    Accepts comma-separated session_ids, loads all positions.json files,
+    combines them, and returns a single heatmap PNG in memory.
+    """
+    import json as _json
+    import io
+    import numpy as np
+    from fastapi.responses import Response as _Response
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    session_ids = [s.strip() for s in sessions.split(",") if s.strip()]
+    if not session_ids:
+        raise HTTPException(status_code=422, detail="sessions parameter required")
+
+    all_pts: list[tuple[int, int]] = []
+    for sid in session_ids:
+        path = os.path.join("data", "results", sid, "positions.json")
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            positions = _json.load(f)
+        for p in positions:
+            cx, cy = p.get("cx"), p.get("cy")
+            if cx is not None and cy is not None:
+                all_pts.append((int(cx), int(cy)))
+
+    if not all_pts:
+        raise HTTPException(status_code=404, detail="No position data found")
+
+    CW, CH = court_tracker.COURT_W, court_tracker.COURT_H
+    grid = np.zeros((CH, CW), dtype=np.float32)
+    for x, y in all_pts:
+        grid[int(np.clip(y, 0, CH - 1)), int(np.clip(x, 0, CW - 1))] += 1
+
+    if grid.max() > 0:
+        sigma = 18
+        ksize = int(sigma * 6) | 1
+        grid = cv2.GaussianBlur(grid, (ksize, ksize), sigma)
+
+    court_rgb = cv2.cvtColor(court_tracker._draw_court(CW, CH), cv2.COLOR_BGR2RGB)
+    fig = Figure(figsize=(CW / 100, CH / 100), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(court_rgb, extent=[0, CW, CH, 0], aspect="auto")
+    if grid.max() > 0:
+        ax.imshow(grid, extent=[0, CW, CH, 0], cmap="YlOrRd", alpha=0.75,
+                  vmin=0, vmax=grid.max(), aspect="auto", interpolation="bilinear")
+    ax.set_xlim(0, CW)
+    ax.set_ylim(CH, 0)
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", pad_inches=0, facecolor="#111111")
+    buf.seek(0)
+    return _Response(content=buf.read(), media_type="image/png")
+
+
+@app.post("/opponent_coaching")
+async def get_opponent_coaching(body: dict):
+    try:
+        feedback = await asyncio.to_thread(gemini.get_opponent_coaching, body)
+    except Exception as exc:
+        err = str(exc)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            raise HTTPException(status_code=429, detail="quota_exceeded")
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+    if feedback is None:
+        raise HTTPException(status_code=503, detail="LLM unavailable")
+    # feedback is now {"analysis": "...", "advice": "..."}
+    return feedback
+
+
 @app.post("/users", response_model=UserRead)
 def create_user(user: UserCreate, sqlite_db: Session = Depends(db.get_db)):
     db_user = db.User(name=user.name, skill_level=user.skill_level)
@@ -434,4 +964,7 @@ def get_user_progress_chart(
 if os.path.isdir(_FRONTEND_BUILD):
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
-        return FileResponse(os.path.join(_FRONTEND_BUILD, "index.html"))
+        return FileResponse(
+            os.path.join(_FRONTEND_BUILD, "index.html"),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )

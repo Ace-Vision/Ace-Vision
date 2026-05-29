@@ -6,7 +6,7 @@ const SKILL_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
 export default function SignUp() {
   const navigate = useNavigate();
 
-  const [form, setForm] = useState({ name: '', email: '', password: '', skill_level: 'Beginner' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', skill_level: 'Beginner', preferred_sport: 'badminton' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -28,7 +28,7 @@ export default function SignUp() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/auth/register`, {
+      const res = await fetch(`${process.env.REACT_APP_API_URL || ''}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, skill_level: form.skill_level.toLowerCase() }),
@@ -40,6 +40,7 @@ export default function SignUp() {
       }
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user', JSON.stringify({ id: data.user_id, name: data.name, email: data.email }));
+      localStorage.setItem('preferred_sport', form.preferred_sport);
       localStorage.removeItem('guest');
       navigate('/home');
     } catch {
@@ -151,7 +152,7 @@ export default function SignUp() {
             </div>
 
             {/* Skill level */}
-            <div className="mb-6">
+            <div className="mb-4">
               <label className="block text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.5)' }}>
                 Skill level
               </label>
@@ -169,6 +170,33 @@ export default function SignUp() {
                     }
                   >
                     {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Preferred sport */}
+            <div className="mb-6">
+              <label className="block text-xs font-medium mb-1" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                Which sport do you mainly play?
+              </label>
+              <p className="text-xs mb-3" style={{ color: 'rgba(255,255,255,0.2)' }}>
+                We'll skip the selection screen and take you straight there
+              </p>
+              <div className="flex gap-2">
+                {[{ value: 'badminton', label: 'Badminton' }, { value: 'tennis_serve', label: 'Tennis' }].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setForm(prev => ({ ...prev, preferred_sport: value }))}
+                    className="flex-1 rounded-2xl py-3 text-xs font-semibold transition-all duration-200"
+                    style={
+                      form.preferred_sport === value
+                        ? { background: '#C8FF57', color: '#000' }
+                        : { background: '#1a1a1a', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }
+                    }
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

@@ -83,3 +83,16 @@ class AnalyseResponse(BaseModel):
     coaching: Optional[dict] = None
     highlight_applied: bool = False
     model_config = ConfigDict(from_attributes=True)
+
+class MatchShotInfo(BaseModel):
+    peak_time_s: float
+    shot_type:   str = "forehand"
+    confidence:  float = 0.5
+
+class MatchAnalyseResponse(BaseModel):
+    session_id: str
+    sport_type: SportType
+    shot_count: int
+    shots: List[MatchShotInfo]
+    clip_filenames: List[str] = []
+    coaching: Optional[dict] = None

@@ -20,9 +20,11 @@ Key responsibilities:
 import glob
 import os
 import shutil
+import tempfile
 import uuid
 
 from ml import extractor, smoother, normaliser, calculator, scorer, renderer
+from backend import shot_detector
 
 # Maps each sport to its sample video folder.
 # We pick the first video file found in the folder so the filename doesn't matter.
@@ -141,4 +143,69 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
         "overall_score": overall_score,
         "keypoints_list": smoothed_keypoints,
         "angles_list": angles_list,
+    }
+
+
+def run_match_pipeline(video_path: str, sport_type: str) -> dict:
+    """
+    Match analysis pipeline.
+
+    1. Extract pose keypoints at reduced frame rate (every SAMPLE_STRIDE frames).
+    2. Detect overhead shot events using wrist-above-shoulder threshold.
+    3. Extract a clip around each detected shot's peak contact frame.
+    4. Concatenate all clips into one video for VLM trend analysis.
+
+    Returns:
+        dict with session_id, shot_count, clips_path (concatenated video),
+        shots (list of peak_time_s per shot), sport_type.
+    """
+    import cv2 as _cv2
+
+    session_id = str(uuid.uuid4())
+    results_dir = os.path.join("data", "results", session_id)
+    os.makedirs("uploads", exist_ok=True)
+
+    # Step 1: strided pose extraction
+    print(f"[match] Extracting keypoints (stride={shot_detector.SAMPLE_STRIDE})…")
+    keypoints_list, fps = shot_detector.extract_keypoints_strided(video_path)
+
+    # Step 2: detect shots
+    shots = shot_detector.detect_shots(keypoints_list, fps)
+    print(f"[match] Detected {len(shots)} overhead shot(s)")
+
+    # Step 2b: classify forehand/backhand using actual consecutive frames
+    if shots:
+        print("[match] Classifying shot types from video frames…")
+        shot_detector.classify_shots_from_video(video_path, shots, fps)
+        for i, s in enumerate(shots):
+            print(f"[match]   Shot {i+1}: {s['shot_type']} (conf={s['confidence']:.2f})")
+
+    if not shots:
+        return {
+            "session_id": session_id,
+            "shot_count": 0,
+            "clips_path": None,
+            "clip_paths": [],
+            "shots": [],
+            "sport_type": sport_type,
+        }
+
+    # Step 3: extract individual clips into data/results/<session_id>/
+    os.makedirs(results_dir, exist_ok=True)
+    clip_paths = []
+    for i, shot in enumerate(shots):
+        clip_path = os.path.join(results_dir, f"shot_{i+1:03d}_t{shot['peak_time_s']:.1f}s.mp4")
+        shot_detector.extract_clip(video_path, shot["start_frame"], shot["end_frame"], clip_path)
+        clip_paths.append(clip_path)
+        print(f"[match] Shot {i+1}: peak at {shot['peak_time_s']:.1f}s  "
+              f"{shot['shot_type']} (conf={shot['confidence']:.2f}) → {clip_path}")
+
+    return {
+        "session_id": session_id,
+        "shot_count": len(shots),
+        "clip_paths": clip_paths,
+        "shots": [{"peak_time_s": s["peak_time_s"],
+                   "shot_type":   s["shot_type"],
+                   "confidence":  s["confidence"]} for s in shots],
+        "sport_type": sport_type,
     }

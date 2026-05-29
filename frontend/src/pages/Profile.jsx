@@ -11,7 +11,7 @@ function Profile() {
     <div className="min-h-screen bg-[#0a0a0a] pb-28">
 
       <div className="px-5 pt-16 pb-7">
-        <p className="text-[11px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
+        <p className="text-[13px] font-semibold text-[#444] tracking-widest uppercase mb-2">Ace Vision</p>
         <h1 className="text-3xl font-bold text-white">Profile.</h1>
       </div>
 
@@ -37,7 +37,7 @@ function Profile() {
           ].map(s => (
             <div key={s.label} className="card p-4 text-center">
               <p className="text-2xl font-black text-white tabular-nums">{s.value}</p>
-              <p className="text-[10px] text-[#444] mt-1 font-semibold uppercase tracking-wider">{s.label}</p>
+              <p className="text-[12px] text-[#444] mt-1 font-semibold uppercase tracking-wider">{s.label}</p>
             </div>
           ))}
         </div>
@@ -51,7 +51,7 @@ function Profile() {
           <div className="h-1 bg-[#1e1e1e] rounded-full overflow-hidden">
             <div className="h-full bg-[#C8FF57] rounded-full" style={{ width: '67%' }} />
           </div>
-          <p className="text-[10px] text-[#333] mt-2">33 points to Expert</p>
+          <p className="text-[12px] text-[#333] mt-2">33 points to Expert</p>
         </div>
 
         {/* Menu */}

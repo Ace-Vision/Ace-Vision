@@ -15,7 +15,7 @@ HIGHLIGHT_JOINTS = [
 ]
 
 """"
-Using Gemini API for video analysis. This version uses gemini-2.5-flash,
+Using Gemini API for video analysis. This version uses gemini-2.0-flash,
 which is smaller and but offers more free usage than the larger gemini-2.5-pro.
 Usually it takes a few attempts to generate since it is often busy.
 """
@@ -55,18 +55,23 @@ class gemini_model:
             )
         return "\n".join(lines)
 
-    def analyze_video(self, video_path: str, prompt: str, response_schema: dict | None = None) -> str:
+    def _upload_and_wait(self, video_path: str):
+        """Upload a single video to Gemini Files API and wait until ACTIVE."""
         print(f"Uploading: {video_path}")
-        video_file = self.client.files.upload(file=video_path)
-
-        print(f"Processing (ID: {video_file.name})", end="")
-        while video_file.state.name == "PROCESSING":
+        f = self.client.files.upload(file=video_path)
+        print(f"  Processing {f.name}", end="", flush=True)
+        while f.state.name == "PROCESSING":
             print(".", end="", flush=True)
             time.sleep(2)
-            video_file = self.client.files.get(name=video_file.name)
+            f = self.client.files.get(name=f.name)
+        print()
+        if f.state.name != "ACTIVE":
+            raise ValueError(f"File {f.name} failed to reach ACTIVE: {f.state.name}")
+        return f
 
-        if video_file.state.name != "ACTIVE":
-            raise ValueError(f"Video failed to reach ACTIVE state: {video_file.state.name}")
+    def analyze_video(self, video_path: str, prompt: str, response_schema: dict | None = None) -> str:
+        """Analyse a single video file."""
+        video_file = self._upload_and_wait(video_path)
 
         config = None
         if response_schema:
@@ -78,9 +83,9 @@ class gemini_model:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                print(f"\nAnalysis Attempt {attempt + 1}...")
+                print(f"Analysis Attempt {attempt + 1}...")
                 response = self.client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=[video_file, prompt],
                     config=config,
                 )
@@ -189,9 +194,9 @@ STEP 3 — IDENTIFY THE ROOT CAUSE using these common beginner mistake patterns:
 STEP 4 — WRITE YOUR COACHING FEEDBACK following this exact structure:
 - Sentence 1: State the single most important thing to fix, concretely and observably. Describe what the player IS doing vs. what they SHOULD be doing (e.g. "At contact your elbow is bent — you need your arm fully extended above your head"). Do not be vague.
 - Sentence 2–3: Explain why it matters and give one concrete cue or drill to fix it.
-- Final sentence: Name one thing the player did well.
+- Final sentence: Name one thing you did well.
 
-Maximum 90 words. Be direct — a player should finish reading and know exactly what to work on next session.
+Maximum 90 words. Be direct. Address the athlete as "you" throughout — never say "the player".
 
 Also output:
 - highlight_joint: the single joint from the list that needs the most correction
@@ -221,7 +226,392 @@ If the video is too dark, too short, or clearly not {sport_label}, set advice to
         except Exception:
             return None
 
+    _CLASSIFY_BATCH_SIZE = 5
+
+    _BADMINTON_VISUAL_CUES = """
+FOREHAND_CLEAR:
+  - Player's body is turned SIDEWAYS — non-dominant shoulder points toward the shuttle
+  - Hitting arm draws back with a HIGH ELBOW (elbow at or above shoulder, racket behind the head)
+  - Clear body ROTATION: hips and shoulders uncoil through the swing
+  - Contact point is ABOVE and slightly in front of the dominant shoulder at full arm extension
+  - Long sweeping follow-through that crosses the body downward
+
+SMASH:
+  - Same high-elbow backswing setup as forehand clear
+  - Swing is visibly faster and the racket angle is more DOWNWARD at contact
+  - Body leans FORWARD aggressively into the shot
+  - May be a JUMP SMASH — player leaves the ground before or at contact
+  - Follow-through is sharp and abbreviated compared to a clear
+
+BACKHAND:
+  - Hitting arm CROSSES the body's centre line (right arm swings to the left side or vice versa)
+  - OR the player's DOMINANT shoulder is CLOSER to the shuttle than the non-dominant shoulder at setup
+  - Elbow often leads, arm comes from the non-dominant side of the body
+  - Body rotation direction is OPPOSITE to a forehand shot
+  - Contact point tends to be more in front of the body, not at full overhead extension
+
+OTHER:
+  - Net shots, low defensive clears, drives, serves, or any clip where a clear overhead swing is not visible
 """
-my_vlm = gemini_model(API_KEY)
-my_vlm.get_coaching(video_path, skill_level="intermediate")
+
+    _TENNIS_VISUAL_CUES = """
+FOREHAND_CLEAR (overhead smash or serve):
+  - High ball toss in front of dominant shoulder
+  - Full trophy position with high elbow
+  - Clear upward extension to contact
+
+SMASH:
+  - Opponent lob → player reaches overhead aggressively downward
+
+BACKHAND:
+  - Two-handed or one-handed backhand grip and swing
+
+OTHER:
+  - Groundstrokes, volleys, or unclear clips
 """
+
+    def _classify_batch(self, uploaded_batch: list, global_offset: int,
+                        sport_type: str) -> list[dict]:
+        """
+        Classify a small batch of already-uploaded clips, with retry on 503.
+        Returns list of {"index": <global>, "shot_type": <str>}.
+        """
+        n = len(uploaded_batch)
+        cues = self._BADMINTON_VISUAL_CUES if sport_type == "badminton" else self._TENNIS_VISUAL_CUES
+
+        prompt = f"""You are classifying {n} badminton shot clips.
+
+The clips are presented in order. Within this batch they are numbered 0 to {n - 1}.
+
+Use these visual criteria to decide:
+{cues}
+
+Rules:
+- Output exactly {n} classifications, one per clip, in order (index 0, 1, 2 …).
+- Be decisive — choose the closest match even if the clip is ambiguous.
+- Do NOT skip any clip.
+"""
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "classifications": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "index":     {"type": "integer"},
+                            "shot_type": {"type": "string",
+                                          "enum": ["forehand_clear", "smash", "backhand", "other"]},
+                        },
+                        "required": ["index", "shot_type"],
+                    },
+                },
+            },
+            "required": ["classifications"],
+        }
+
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+        )
+
+        for attempt in range(4):
+            try:
+                response = self.client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[*uploaded_batch, prompt],
+                    config=config,
+                )
+                data = json.loads(response.text)
+                results = []
+                for item in data.get("classifications", []):
+                    local_idx = item.get("index", 0)
+                    results.append({
+                        "index":     global_offset + local_idx,
+                        "shot_type": item.get("shot_type", "other"),
+                    })
+                return results
+            except Exception as e:
+                if "503" in str(e) and attempt < 3:
+                    wait = (attempt + 1) * 15
+                    print(f"  503 on batch, retrying in {wait}s…")
+                    time.sleep(wait)
+                    continue
+                raise
+
+    def get_match_coaching(self, clip_paths: list[str],
+                           sport_type: str = "badminton") -> dict | None:
+        """
+        1. Upload all clips.
+        2. Classify in batches of CLASSIFY_BATCH_SIZE (small enough for accurate labelling).
+        3. One coaching call across all clips for the key advice.
+        """
+        if not clip_paths:
+            return None
+
+        sport_label = "badminton overhead shot" if sport_type == "badminton" else "tennis serve"
+        patterns    = self._BADMINTON_PATTERNS if sport_type == "badminton" else self._TENNIS_SERVE_PATTERNS
+        shot_count  = len(clip_paths)
+
+        uploaded = []
+        try:
+            for path in clip_paths:
+                uploaded.append(self._upload_and_wait(path))
+
+            # ── Step 1: classify in small batches ──────────────────────────
+            all_classifications = []
+            for start in range(0, len(uploaded), self._CLASSIFY_BATCH_SIZE):
+                batch = uploaded[start:start + self._CLASSIFY_BATCH_SIZE]
+                print(f"Classifying clips {start}–{start + len(batch) - 1}…")
+                try:
+                    results = self._classify_batch(batch, start, sport_type)
+                    all_classifications.extend(results)
+                    print(f"  → {[r['shot_type'] for r in results]}")
+                except Exception as e:
+                    print(f"  Batch classification failed: {e} — marking as 'other'")
+                    for i in range(len(batch)):
+                        all_classifications.append({"index": start + i, "shot_type": "other"})
+                # brief pause between batches to avoid rate limiting
+                if start + self._CLASSIFY_BATCH_SIZE < len(uploaded):
+                    time.sleep(5)
+
+            # ── Step 2: coaching across all clips ──────────────────────────
+            coaching_prompt = f"""You are an expert {sport_label} coach reviewing {shot_count} overhead shot clips from a match.
+
+Each clip: backswing → contact → follow-through.
+
+Watch ALL clips. Identify the single most important thing this player needs to fix.
+Reference patterns:
+{patterns}
+
+Output:
+  advice:          Max 60 words. What they do wrong, why it matters in a match, one fix cue. End with one positive.
+  pattern_id:      Number 1–5 matching the main pattern.
+  highlight_joint: Joint needing the most work.
+
+If fewer than 2 clips show a clear overhead, set advice to "Not enough clear overhead shots to identify trends."
+"""
+
+            coaching_schema = {
+                "type": "object",
+                "properties": {
+                    "advice":          {"type": "string"},
+                    "pattern_id":      {"type": "integer"},
+                    "highlight_joint": {"type": "string", "enum": HIGHLIGHT_JOINTS},
+                },
+                "required": ["advice", "pattern_id", "highlight_joint"],
+            }
+
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=coaching_schema,
+            )
+
+            for attempt in range(3):
+                try:
+                    print(f"Coaching attempt {attempt + 1}…")
+                    response = self.client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=[*uploaded, coaching_prompt],
+                        config=config,
+                    )
+                    data = json.loads(response.text)
+                    return {
+                        "clips":           all_classifications,
+                        "advice":          data.get("advice", "").strip(),
+                        "pattern_id":      data.get("pattern_id"),
+                        "highlight_joint": data.get("highlight_joint"),
+                    }
+                except Exception as e:
+                    if "503" in str(e) and attempt < 2:
+                        time.sleep((attempt + 1) * 10)
+                        continue
+                    raise
+
+        except Exception as e:
+            print(f"get_match_coaching failed: {e}")
+            return None
+        finally:
+            for f in uploaded:
+                try:
+                    self.client.files.delete(name=f.name)
+                except Exception:
+                    pass
+
+    def get_rally_coaching(self, session_data: dict) -> str | None:
+        """
+        Text-only coaching feedback for a match, based on rally tags + user notes.
+        No video upload needed.
+        """
+        user_wins     = session_data.get("user_wins", 0)
+        opp_wins      = session_data.get("opponent_wins", 0)
+        total         = session_data.get("total_rallies", 0)
+        opponent_name = (session_data.get("opponent_name") or "").strip()
+        match_comment = (session_data.get("match_comment") or "").strip()
+        sport_type    = session_data.get("sport_type", "badminton")
+        loss_tags     = session_data.get("loss_tags", {})
+        rally_notes   = session_data.get("rally_notes", {})
+
+        tag_counts = {}
+        for v in loss_tags.values():
+            tag_counts[v] = tag_counts.get(v, 0) + 1
+        tagged_total = sum(tag_counts.values())
+        untagged     = max(0, opp_wins - tagged_total)
+
+        loss_block = "\n".join(
+            f"  {tag.replace('_', ' ').title()}: {cnt}"
+            for tag, cnt in sorted(tag_counts.items(), key=lambda x: -x[1])
+        ) or "  (none tagged)"
+        if untagged:
+            loss_block += f"\n  Untagged: {untagged}"
+
+        notes_lines = [
+            f"  Rally {int(i)+1}: {n.strip()}"
+            for i, n in sorted(rally_notes.items(), key=lambda x: int(x[0]))
+            if n.strip()
+        ]
+        notes_block = "\n".join(notes_lines) if notes_lines else "  (none)"
+
+        sport_label = "badminton" if sport_type == "badminton" else "tennis"
+
+        prompt = f"""You are an expert {sport_label} coach reviewing a completed match.
+
+MATCH RESULT:
+  Score: {user_wins} wins – {opp_wins} losses ({total} rallies total)
+{"  Opponent: " + opponent_name if opponent_name else ""}
+{"  Player's own thoughts: " + match_comment if match_comment else ""}
+
+LOSS BREAKDOWN ({opp_wins} points lost):
+{loss_block}
+
+PLAYER NOTES ON INDIVIDUAL RALLIES:
+{notes_block}
+
+Output exactly two labeled sections. Use these exact headers on their own line:
+
+ANALYSIS:
+2–3 sentences. State the dominant error pattern and what it reveals about your current weakness. Facts and observations only — no advice here.
+
+TRAINING:
+2–3 sentences. Prescribe one specific drill and one movement or technical focus to address the dominant pattern. End with one concrete objective for the next session.
+
+Style rules:
+- Declarative statements only. No hedging ("it seems", "it appears").
+- No motivational filler ("keep working", "you've got this", "good luck").
+- No filler openers ("Based on the data", "It's clear that").
+- Every sentence states a fact, a pattern, or a directive.
+- Address the athlete as "you" — never say "the player"."""
+
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+        )
+        raw = (response.text or "").strip()
+        if not raw:
+            return None
+
+        import re as _re
+        analysis_match = _re.search(r"ANALYSIS:\s*(.+?)(?=TRAINING:|$)", raw, _re.S)
+        training_match = _re.search(r"TRAINING:\s*(.+?)$", raw, _re.S)
+        analysis = analysis_match.group(1).strip() if analysis_match else ""
+        training = training_match.group(1).strip() if training_match else ""
+
+        if analysis and training:
+            return {"analysis": analysis, "training": training}
+        return {"analysis": raw, "training": ""}
+
+    def get_opponent_coaching(self, data: dict) -> str | None:
+        """
+        Tactical scouting advice for a specific opponent, based on:
+        - Aggregated loss tags across all matches vs. that opponent
+        - Court zone analysis (where the opponent pushes the user)
+        - User's own match comments
+        """
+        opponent_name  = (data.get("opponent_name") or "this opponent").strip()
+        sport_type     = data.get("sport_type", "badminton")
+        total_matches  = data.get("total_matches", 0)
+        total_wins     = data.get("total_wins", 0)
+        total_losses   = data.get("total_losses", 0)
+        mistake_counts = data.get("mistake_counts", {})
+        zone_info      = (data.get("zone_description") or "").strip()
+        zone_label     = (data.get("zone_label") or "").strip()
+        comments       = [c for c in (data.get("comments") or []) if c and c.strip()]
+
+        sport_label   = "badminton" if sport_type == "badminton" else "tennis"
+        net_error     = mistake_counts.get("net_error", 0)
+        out_long      = mistake_counts.get("out_long", 0)
+        swing_miss    = mistake_counts.get("swing_miss", 0)
+        bad_footwork  = mistake_counts.get("bad_footwork", 0)
+        late_reaction = mistake_counts.get("late_reaction", 0)
+        weak_return   = mistake_counts.get("weak_return", 0)
+        serve_fault   = mistake_counts.get("serve_fault", 0)
+        forced_error  = mistake_counts.get("forced_error", 0)
+        total_tagged  = net_error + out_long + swing_miss + bad_footwork + late_reaction + weak_return + serve_fault + forced_error
+
+        comments_block = "\n".join(f'  - "{c.strip()}"' for c in comments) or "  (none)"
+
+        if zone_label:
+            zone_section = f"COURT ZONE (where {opponent_name} tends to push you):\n  {zone_info}"
+            advice_zone_line = (
+                f"{opponent_name} targets the {zone_label} zone — include a drill specifically for moving to that zone."
+            )
+        else:
+            zone_section = ""
+            advice_zone_line = ""
+
+        prompt = f"""You are an expert {sport_label} analyst writing a pre-match scouting report.
+
+OPPONENT: {opponent_name}
+HEAD-TO-HEAD: {total_wins}W – {total_losses}L ({total_matches} matches)
+
+LOSS BREAKDOWN vs {opponent_name.upper()} ({total_tagged} tagged):
+  Net error:     {net_error}
+  Out / Long:    {out_long}
+  Swing miss:    {swing_miss}
+  Bad footwork:  {bad_footwork}
+  Late reaction: {late_reaction}
+  Weak return:   {weak_return}
+  Serve fault:   {serve_fault}
+  Forced error:  {forced_error}
+{zone_section}
+PLAYER'S MATCH NOTES:
+{comments_block}
+
+Output exactly two labeled sections. Use these exact headers on their own line:
+
+ANALYSIS:
+2–3 sentences. State the dominant error pattern and what tactical behaviour from {opponent_name} causes it. Facts only — no advice here.
+
+ADVICE:
+2–3 sentences. One concrete tactical adjustment and one specific drill or movement focus to address the dominant pattern. {advice_zone_line} End with one precise match objective.
+
+Style rules:
+- Declarative statements only. No hedging ("it seems", "it appears").
+- No motivational filler ("keep working", "you've got this", "good luck").
+- No filler openers ("Based on the data", "It's clear that").
+- Every sentence states a fact, a pattern, or a directive.
+- Address the athlete as "you" — never say "the player"."""
+
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+        )
+        raw = (response.text or "").strip()
+        if not raw:
+            return None
+
+        # Parse the two sections
+        import re as _re
+        analysis, advice = "", ""
+        analysis_match = _re.search(r"ANALYSIS:\s*(.+?)(?=ADVICE:|$)", raw, _re.S)
+        advice_match   = _re.search(r"ADVICE:\s*(.+?)$", raw, _re.S)
+        if analysis_match:
+            analysis = analysis_match.group(1).strip()
+        if advice_match:
+            advice = advice_match.group(1).strip()
+
+        if analysis and advice:
+            return {"analysis": analysis, "advice": advice}
+        # Fallback: put everything in analysis
+        return {"analysis": raw, "advice": ""}

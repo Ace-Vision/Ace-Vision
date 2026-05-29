@@ -1,12 +1,16 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Splash   from './pages/Splash';
-import SignUp   from './pages/SignUp';
-import Home     from './pages/Home';
-import Result   from './pages/Result';
-import Advice   from './pages/Advice';
-import History  from './pages/History';
-import Profile  from './pages/Profile';
-import Drills   from './pages/Drills';
+import Splash       from './pages/Splash';
+import SignUp       from './pages/SignUp';
+import Home        from './pages/Home';
+import Result      from './pages/Result';
+import MatchResult    from './pages/MatchResult';
+import MovementResult from './pages/MovementResult';
+import RallyResult    from './pages/RallyResult';
+import Advice         from './pages/Advice';
+import MatchHistory   from './pages/MatchHistory';
+import Insights       from './pages/Insights';
+import OpponentBook   from './pages/OpponentBook';
+import OpponentDetail from './pages/OpponentDetail';
 
 function isTokenValid() {
   if (localStorage.getItem('guest') === 'true') return true;
@@ -35,12 +39,16 @@ function App() {
       <Routes>
         <Route path="/"       element={<Splash />}  />
         <Route path="/signup" element={<SignUp />}  />
-        <Route path="/home"    element={<PrivateRoute element={<Home />} />}    />
-        <Route path="/result"  element={<PrivateRoute element={<Result />} />}  />
-        <Route path="/advice"  element={<PrivateRoute element={<Advice />} />}  />
-        <Route path="/history" element={<PrivateRoute element={<History />} />} />
-        <Route path="/profile" element={<PrivateRoute element={<Profile />} />} />
-        <Route path="/drills"  element={<PrivateRoute element={<Drills />} />}  />
+        <Route path="/home"         element={<PrivateRoute element={<Home />} />}        />
+        <Route path="/result"       element={<PrivateRoute element={<Result />} />}      />
+        <Route path="/match-result"    element={<PrivateRoute element={<MatchResult />} />}    />
+        <Route path="/movement-result" element={<PrivateRoute element={<MovementResult />} />} />
+        <Route path="/rally-result"    element={<PrivateRoute element={<RallyResult />} />}    />
+        <Route path="/advice"       element={<PrivateRoute element={<Advice />} />}      />
+        <Route path="/match-history" element={<PrivateRoute element={<MatchHistory />} />} />
+        <Route path="/insights"      element={<PrivateRoute element={<Insights />} />} />
+        <Route path="/opponent-book"   element={<PrivateRoute element={<OpponentBook />} />} />
+        <Route path="/opponent-detail" element={<PrivateRoute element={<OpponentDetail />} />} />
         <Route path="*"       element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
