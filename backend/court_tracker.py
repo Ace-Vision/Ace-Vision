@@ -90,7 +90,7 @@ def extract_ankle_positions(video_path: str, progress_cb=None, pct_start: int = 
         mp_scale = 1.0
         mp_w, mp_h = video_w, video_h
 
-    base = python.BaseOptions(model_asset_path="models/pose_landmarker.task")
+    base = python.BaseOptions(model_asset_path="models/pose_landmarker.task", delegate=python.BaseOptions.Delegate.CPU)
     opts = vision.PoseLandmarkerOptions(
         base_options=base,
         running_mode=vision.RunningMode.VIDEO,
