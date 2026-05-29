@@ -2,15 +2,17 @@ from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, JSO
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import create_engine
 import datetime
+import os
 
-def _utc_now():
-    return datetime.datetime.now(datetime.timezone.utc)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ace_vision.db")
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./ace_vision.db"
+# Render의 PostgreSQL URL은 postgres://로 시작하는데 SQLAlchemy는 postgresql://이 필요함
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

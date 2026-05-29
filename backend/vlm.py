@@ -21,7 +21,7 @@ Usually it takes a few attempts to generate since it is often busy.
 """
 
 # 1. Input API key and choose video path
-#API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk" 
+#API_KEY = "AIzaSyDxZjxpnb0JIotRIFVVplb_GmOtdHO9Enk"
 #video_path = r"C:\Users\ldahl\Downloads\user_clear.mp4"
 #video_path_0 = r"C:\Users\ldahl\Videos\WIN_20260429_16_56_29_Pro.mp4"
 
@@ -36,9 +36,6 @@ class gemini_model:
     Note: This implementation assumes the video contains the necessary visual information
     for the model to analyze and provide feedback. Does not process with respect to any
     numerical deviation scores.
-
-    Also, this implementation does not currently integrate with the VectorDatabase for contextual search,
-    but that could be added in future iterations by including relevant text from the database in the prompt.
     """
 
     def __init__(self, api_key: str):
@@ -98,71 +95,102 @@ class gemini_model:
                     continue
                 self.client.files.delete(name=video_file.name)
                 raise e
-            
+
+    _BADMINTON_PATTERNS = """
+1. **Late positioning / low contact point**
+   Player is still moving when they swing; contact happens below ideal height.
+   → "You're hitting the shuttle too late and too low — get your feet set early so you can reach up and make contact at full arm extension above your head."
+
+2. **Arm-only swing (no kinetic chain)**
+   Shoulders stay square; power comes only from the arm, not the body.
+   → "You're swinging with just your arm — turn your shoulders sideways during the backswing, then rotate into the shot to transfer your body weight into the hit."
+
+3. **Collapsed backswing**
+   Elbow drops too low or racket barely drawn back before the forward swing.
+   → "Your backswing is too short — draw the racket back behind your ear with the elbow high before you swing forward."
+
+4. **Body stays facing the net**
+   Hips and shoulders remain square throughout; no sideways stance.
+   → "You're facing the net the whole time — step sideways so your non-dominant shoulder points at the net, then uncoil into the shot."
+
+5. **Swing stops at contact (no follow-through)**
+   Arm decelerates right at the moment of impact; swing is blocked or tense.
+   → "You're braking your swing at impact — let the racket follow all the way down across your body after you hit the shuttle."
+"""
+
+    _TENNIS_SERVE_PATTERNS = """
+1. **Ball toss too far forward or to the side**
+   Player must lunge or reach awkwardly to make contact.
+   → "Your toss is landing too far in front / to the side — practice tossing straight up to just in front of your hitting shoulder so you can swing naturally into it."
+
+2. **No leg drive (flat-footed trophy position)**
+   Knees barely bend; all power comes from the arm.
+   → "You're not using your legs — bend your knees deeply in the trophy position, then push up and extend fully as you swing so your whole body drives the serve."
+
+3. **Elbow drops at racket drop ('waiter's tray')**
+   Elbow falls below shoulder level during the racket drop phase.
+   → "Your elbow is dropping too low before you swing — keep your elbow up near shoulder height during the racket drop so you can snap forward with full power."
+
+4. **No shoulder rotation (arm-only serve)**
+   Shoulders stay parallel to the baseline; no coil-and-uncoil.
+   → "Your shoulders aren't rotating — turn your back shoulder toward the back fence in the trophy position, then unwind into the serve to generate real power."
+
+5. **Early arm extension (no wrist snap at contact)**
+   Arm fully extends before contact; wrist stays locked through impact.
+   → "You're reaching for the ball too early — stay loose, let the wrist snap forward at the very last moment of contact rather than pushing through with a stiff arm."
+"""
 
     def get_coaching(self, deviation_scores: dict, video_path: str,
                      skill_level: str = "intermediate",
-                     sport_type: str = "badminton") -> dict | None:
+                     sport_type: str = "badminton",
+                     context: str = "") -> dict | None:
 
         checkpoints = deviation_scores.get("checkpoints", {})
 
         if sport_type == "badminton":
-            prompt_body = "\n\n".join([
+            sport_label = "badminton clear (overhead shot)"
+            checkpoint_data = "\n\n".join([
                 self._format_checkpoint("Backswing",      checkpoints.get("backswing")),
                 self._format_checkpoint("Contact",        checkpoints.get("contact")),
                 self._format_checkpoint("Follow Through", checkpoints.get("follow_through")),
             ])
+            patterns = self._BADMINTON_PATTERNS
         else:
-            prompt_body = "\n\n".join([
+            sport_label = "tennis serve"
+            checkpoint_data = "\n\n".join([
                 self._format_checkpoint("Trophy Position", checkpoints.get("trophy")),
                 self._format_checkpoint("Racket Drop",     checkpoints.get("racket_drop")),
                 self._format_checkpoint("Contact",         checkpoints.get("contact")),
             ])
+            patterns = self._TENNIS_SERVE_PATTERNS
 
-        prompt = f"""You are an expert badminton coach analyzing a clear overhead shot.
-            The player's skill level is: {skill_level}.
+        context_section = f"\nPAST SESSION CONTEXT (from similar sessions — reference only if relevant):\n{context}\n" if context else ""
 
-            Joint deviation data at 3 key moments (backswing, contact, followthrough):
-            {prompt_body}
-            (severity_score: 0.0 = perfect, 1.0 = maximum deviation from pro baseline)
+        prompt = f"""You are an expert {sport_label} coach. The player's skill level is: {skill_level}.
 
-            ---
+STEP 1 — WATCH THE VIDEO FIRST.
+Look at the player's actual movement. Trust what you see. Your visual observation is the primary source of truth.
 
-            COMMON BEGINNER MISTAKE PATTERNS — use these to identify ROOT CAUSE, not just symptoms:
+STEP 2 — SUPPLEMENTARY DATA (use only to confirm or add nuance to what you observed — do not let numbers override your visual judgment):
+{checkpoint_data}
+(severity_score: 0.0 = no deviation, 1.0 = maximum deviation from reference — treat as a rough hint, not a verdict)
+{context_section}
+STEP 3 — IDENTIFY THE ROOT CAUSE using these common beginner mistake patterns:
+{patterns}
 
-            1. **Late positioning / low contact point**
-            Signs: contact-frame right_shoulder_abduction low, right_elbow_flexion too bent at contact, trunk_lateral_tilt minimal
-            → Don't say "elbow not extended." Say: "You may be getting into position too late — focus on early footwork and positioning before the shuttle arrives."
+STEP 4 — WRITE YOUR COACHING FEEDBACK following this exact structure:
+- Sentence 1: State the single most important thing to fix, concretely and observably. Describe what the player IS doing vs. what they SHOULD be doing (e.g. "At contact your elbow is bent — you need your arm fully extended above your head"). Do not be vague.
+- Sentence 2–3: Explain why it matters and give one concrete cue or drill to fix it.
+- Final sentence: Name one thing the player did well.
 
-            2. **Wrist-only swing (no kinetic chain)**
-            Signs: wrist_extension deviation high, but right_shoulder_abduction and hip_shoulder_separation are near normal
-            → Don't say "fix your wrist." Say: "You're relying too much on wrist snap — engage your shoulder and elbow first, then let the wrist follow through naturally."
+Maximum 90 words. Be direct — a player should finish reading and know exactly what to work on next session.
 
-            3. **Backswing too large or too small**
-            Signs: backswing-frame right_elbow_flexion or right_shoulder_abduction highly deviated
-            → Say: "Your backswing preparation is off — aim for a compact but full arm draw before swinging forward."
+Also output:
+- highlight_joint: the single joint from the list that needs the most correction
+- pattern_id: the number (1–5) of the pattern that best matches what you saw
 
-            4. **Body facing forward (no rotation)**
-            Signs: hip_shoulder_separation low at backswing, trunk_lateral_tilt near zero throughout
-            → Say: "Your body is facing the net too early — turn sideways first and use your body rotation to generate power."
-
-            5. **Stopping at contact (no follow-through)**
-            Signs: followthrough-frame wrist_extension and right_elbow_flexion heavily deviated
-            → Say: "You're stopping your swing at impact — commit to a full follow-through to maximize power and control."
-
-            ---
-
-            Using the deviation data AND the video, identify which pattern above best matches.
-            Give 1 coaching correction focused on the ROOT CAUSE of the issue, not the symptom.
-            Also mention briefly what the player did well.
-            Be concise, practical, and encouraging. Maximum 100 words.
-
-            Also select:
-            - highlight_joint: the single body part from the provided list needing the most correction
-            - pattern_id: the number (1-5) of the matching pattern above
-
-            If the video is unclear or is not badminton/tennis, set advice to "Video unclear, unable to provide advice.", pick any joint, and set pattern_id to 1.
-            """
+If the video is too dark, too short, or clearly not {sport_label}, set advice to "Video unclear, unable to provide advice.", pick any joint, and set pattern_id to 1.
+"""
 
         schema = {
             "type": "object",
@@ -184,9 +212,6 @@ class gemini_model:
             }
         except Exception:
             return None
-    
-        #print(f"Analyzing video for coaching advice with skill level '{skill_level}'...")
-        #print(self.analyze_video(video_path, prompt))
 
 """
 my_vlm = gemini_model(API_KEY)

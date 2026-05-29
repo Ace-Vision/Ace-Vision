@@ -87,7 +87,7 @@ export default function Advice() {
     );
   }
 
-  const { session_id, overlay_path, coaching, deviation_scores } = result;
+  const { overlay_path, coaching, deviation_scores } = result;
   const highlightJoint = coaching?.highlight_joint;
   const patternId      = coaching?.pattern_id;
   const pattern        = PATTERNS[patternId] ?? null;
