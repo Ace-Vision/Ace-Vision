@@ -180,6 +180,23 @@ function Result() {
           </div>
         </div>
 
+        {/* Recurring issues badge */}
+        {coaching?.recurring_issues?.length > 0 && (
+          <div
+            className="card-sm px-4 py-3 border border-amber-400/20 animate-fade-up"
+            style={{ animationDelay: '0.25s' }}
+          >
+            <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">Pattern Detected</p>
+            <p className="text-xs text-white/40 leading-relaxed">
+              Still showing up across sessions:{' '}
+              <span className="text-amber-300 font-semibold">
+                {coaching.recurring_issues.map(j => j.replace(/_/g, ' ')).join(', ')}
+              </span>
+              . Coaching has been escalated for these joints.
+            </p>
+          </div>
+        )}
+
         {/* AI Coach */}
         {coaching?.advice && (
           <div className="card-sm px-4 py-4 animate-fade-up" style={{ animationDelay: '0.3s' }}>
