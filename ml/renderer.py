@@ -68,12 +68,15 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Output video: enforce H.264 in MP4 for browser/Streamlit compatibility.
     base, _ = os.path.splitext(video_path)
     output_path = base + '_overlay.mp4'
-    preferred_codecs = ["avc1", "H264", "X264"]
+
+    # Try H.264 encoders natively available in OpenCV.
+    # On Linux servers OpenCV is often built without H.264, so we fall back to
+    # writing mp4v and then re-encoding to H.264 via ffmpeg.
     out = None
-    for codec in preferred_codecs:
+    use_ffmpeg_reencode = False
+    for codec in ["avc1", "H264", "X264"]:
         fourcc = cv2.VideoWriter_fourcc(*codec)
         candidate = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         if candidate.isOpened():
@@ -82,10 +85,15 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
         candidate.release()
 
     if out is None:
-        raise ValueError(
-            "Could not create H.264 output video. "
-            "No H.264 encoder (avc1/H264/X264) is available in this OpenCV build."
-        )
+        # No native H.264 — write to a temp file with mp4v, transcode later.
+        import tempfile
+        _tmp_fd, _tmp_path = tempfile.mkstemp(suffix='_overlay_raw.mp4')
+        os.close(_tmp_fd)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(_tmp_path, fourcc, fps, (width, height))
+        if not out.isOpened():
+            raise ValueError("Could not open any video writer (tried avc1, H264, X264, mp4v).")
+        use_ffmpeg_reencode = True
 
     # Joint to landmark mapping
     joint_landmarks = {
@@ -191,5 +199,15 @@ def render_video(video_path: str, keypoints_list: list[dict], deviation_scores: 
 
     cap.release()
     out.release()
+
+    if use_ffmpeg_reencode:
+        import subprocess
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", _tmp_path,
+             "-vcodec", "libx264", "-preset", "fast", "-crf", "23",
+             "-movflags", "+faststart", output_path],
+            check=True, capture_output=True,
+        )
+        os.unlink(_tmp_path)
 
     return output_path
