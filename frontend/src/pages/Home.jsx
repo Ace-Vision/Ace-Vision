@@ -117,7 +117,9 @@ function Home() {
   const navigate = useNavigate();
   const preferredSport = localStorage.getItem('preferred_sport');
   const isLoggedIn = !!(localStorage.getItem('token')) && localStorage.getItem('guest') !== 'true';
-  const userName = isLoggedIn ? (JSON.parse(localStorage.getItem('user') || '{}').name || '').split(' ')[0] : '';
+  const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const userName = isLoggedIn ? (storedUser.name || '').split(' ')[0] : '';
+  const skillLevel = storedUser.skill_level || 'intermediate';
   // step: 'sport' | 'mode' | 'action' | 'calibrate' | 'loading'
   const [step, setStep] = useState(preferredSport ? 'mode' : 'sport');
   const [improvStat, setImprovStat] = useState(null);
@@ -239,7 +241,7 @@ function Home() {
         endpoint = '/analyse';
         dest     = '/result';
         formData.append('sport_type', sport);
-        formData.append('skill_level', 'intermediate');
+        formData.append('skill_level', skillLevel);
       }
 
       const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData });

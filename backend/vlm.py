@@ -88,7 +88,7 @@ class gemini_model:
             try:
                 print(f"Analysis Attempt {attempt + 1}...")
                 response = self.client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=[video_file, prompt],
                     config=config,
                 )

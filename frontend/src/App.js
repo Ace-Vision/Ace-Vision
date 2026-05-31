@@ -6,7 +6,6 @@ import Result      from './pages/Result';
 import MatchResult    from './pages/MatchResult';
 import MovementResult from './pages/MovementResult';
 import RallyResult    from './pages/RallyResult';
-import Advice         from './pages/Advice';
 import MatchHistory   from './pages/MatchHistory';
 import Insights       from './pages/Insights';
 import OpponentBook   from './pages/OpponentBook';
@@ -44,7 +43,6 @@ function App() {
         <Route path="/match-result"    element={<PrivateRoute element={<MatchResult />} />}    />
         <Route path="/movement-result" element={<PrivateRoute element={<MovementResult />} />} />
         <Route path="/rally-result"    element={<PrivateRoute element={<RallyResult />} />}    />
-        <Route path="/advice"       element={<PrivateRoute element={<Advice />} />}      />
         <Route path="/match-history" element={<PrivateRoute element={<MatchHistory />} />} />
         <Route path="/insights"      element={<PrivateRoute element={<Insights />} />} />
         <Route path="/opponent-book"   element={<PrivateRoute element={<OpponentBook />} />} />

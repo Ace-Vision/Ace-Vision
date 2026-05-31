@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 
-
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
 const FALLBACK = {
@@ -24,6 +23,28 @@ const CHECKPOINTS_BY_SPORT = {
   ],
 };
 
+const PATTERNS = {
+  1: { name: 'Late Positioning',   detail: 'You may be arriving at the shuttle too late, forcing you to hit from a low or cramped position. Focus on early footwork — move into position before the shuttle reaches you.' },
+  2: { name: 'Wrist-only Swing',   detail: 'You\'re relying too much on wrist snap rather than driving through with shoulder and elbow first. Let the larger muscles lead and the wrist follow through naturally at the end.' },
+  3: { name: 'Backswing Issue',     detail: 'Your arm loading before the swing is either too large or too compact compared to the ideal. Aim for a controlled, full draw before swinging forward to build proper momentum.' },
+  4: { name: 'No Body Rotation',   detail: 'Turn sideways first and use hip-to-shoulder rotation to generate power. If your chest faces the net throughout the swing, you\'re losing most of your power before the racket even moves.' },
+  5: { name: 'No Follow-through',  detail: 'You\'re decelerating at the point of contact instead of committing to a full swing. Let the racket follow through completely — stopping early costs you both power and accuracy.' },
+};
+
+const JOINT_TO_METRIC = {
+  right_elbow:    'right_elbow_flexion',
+  left_elbow:     'left_elbow_flexion',
+  right_shoulder: 'right_shoulder_abduction',
+  left_shoulder:  'left_shoulder_abduction',
+  right_wrist:    'wrist_extension',
+  left_wrist:     'wrist_extension',
+  right_knee:     'right_knee_flexion',
+  left_knee:      'left_knee_flexion',
+  right_hip:      'hip_shoulder_separation',
+  left_hip:       'hip_shoulder_separation',
+  nose:           'trunk_lateral_tilt',
+};
+
 function checkpointScore(cpData) {
   const devs = cpData?.deviations ? Object.values(cpData.deviations) : [];
   if (!devs.length) return null;
@@ -36,6 +57,27 @@ function scoreColor(s) {
   if (s >= 75) return 'text-[#C8FF57]';
   if (s >= 55) return 'text-amber-400';
   return 'text-red-400';
+}
+
+function severityLabel(s) {
+  if (s >= 0.7) return { text: 'High',   color: '#f87171' };
+  if (s >= 0.4) return { text: 'Medium', color: '#fb923c' };
+  return                { text: 'Low',   color: '#C8FF57' };
+}
+
+function findJointDeviation(checkpoints, highlightJoint) {
+  if (!checkpoints || !highlightJoint) return null;
+  const metricKey = JOINT_TO_METRIC[highlightJoint];
+  if (!metricKey) return null;
+  let worst = null;
+  for (const cpData of Object.values(checkpoints)) {
+    if (!cpData?.deviations) continue;
+    const dev = cpData.deviations[metricKey];
+    if (dev && (!worst || dev.severity_score > worst.severity_score)) {
+      worst = { ...dev, metric: metricKey };
+    }
+  }
+  return worst;
 }
 
 function ScoreRing({ score }) {
@@ -64,6 +106,15 @@ function Result() {
   const checkpoints = deviation_scores?.checkpoints ?? {};
   const CHECKPOINTS = CHECKPOINTS_BY_SPORT[sport_type] ?? CHECKPOINTS_BY_SPORT.tennis_serve;
   const [openCheckpoint, setOpenCheckpoint] = useState(null);
+
+  const highlightJoint = coaching?.highlight_joint;
+  const patternId      = coaching?.pattern_id;
+  const pattern        = PATTERNS[patternId] ?? null;
+  const jointDev       = findJointDeviation(checkpoints, highlightJoint);
+  const sev            = jointDev ? severityLabel(jointDev.severity_score) : null;
+  const jointLabel     = highlightJoint
+    ? highlightJoint.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    : null;
 
   function toggleCheckpoint(key) {
     setOpenCheckpoint(prev => prev === key ? null : key);
@@ -182,8 +233,12 @@ function Result() {
 
         {/* AI Coach */}
         {coaching?.advice && (
-          <div className="card-sm px-4 py-4 animate-fade-up" style={{ animationDelay: '0.3s' }}>
-            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest mb-3">AI Coach</p>
+          <div
+            className="rounded-2xl p-4 space-y-3 animate-fade-up"
+            style={{ animationDelay: '0.3s', background: '#0f0f0f', border: '1px solid rgba(255,255,255,0.07)' }}
+          >
+            <p className="text-[12px] font-bold text-[#C8FF57] uppercase tracking-widest">AI Coach</p>
+
             <ReactMarkdown
               components={{
                 p: ({ children }) => <p className="text-sm text-white/55 leading-relaxed mb-2 last:mb-0">{children}</p>,
@@ -199,23 +254,56 @@ function Result() {
             >
               {coaching.advice}
             </ReactMarkdown>
+
+            {/* Pattern */}
+            {pattern && (
+              <div className="pt-2 border-t border-white/[0.06]">
+                <p className="text-[11px] font-semibold text-white/25 uppercase tracking-widest mb-1">
+                  Pattern Detected
+                </p>
+                <p className="text-sm font-semibold text-white mb-1">{pattern.name}</p>
+                <p className="text-xs text-white/40 leading-relaxed">{pattern.detail}</p>
+              </div>
+            )}
+
+            {/* Worst joint */}
+            {jointDev && sev && (
+              <div className="pt-2 border-t border-white/[0.06]">
+                <p className="text-[11px] font-semibold text-white/25 uppercase tracking-widest mb-2">
+                  Focus Joint
+                </p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-semibold text-white">{jointLabel}</p>
+                  <span
+                    className="text-xs font-bold px-3 py-1 rounded-full"
+                    style={{ background: sev.color + '22', color: sev.color }}
+                  >
+                    {sev.text}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${Math.min(jointDev.severity_score * 100, 100)}%`,
+                      background: sev.color,
+                      transition: 'width 0.7s ease-out',
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-white/25 mt-1.5">
+                  {jointDev.deviation_deg?.toFixed(1)}° off · {jointDev.direction?.replace(/_/g, ' ')}
+                </p>
+              </div>
+            )}
           </div>
         )}
-
-        {/* Full Advice */}
-        <button
-          onClick={() => navigate('/advice', { state: { result, sport: sport_type } })}
-          className="w-full py-4 rounded-2xl text-sm font-semibold text-black transition-opacity active:opacity-80 animate-fade-up"
-          style={{ background: '#C8FF57', animationDelay: '0.35s' }}
-        >
-          Full Advice →
-        </button>
 
         {/* Analyze Again */}
         <button
           onClick={() => navigate('/home')}
           className="w-full py-4 rounded-2xl bg-white/[0.04] border border-white/[0.07] text-sm font-semibold text-white/30 transition-colors hover:bg-white/[0.07] animate-fade-up"
-          style={{ animationDelay: '0.4s' }}
+          style={{ animationDelay: '0.35s' }}
         >
           Analyze Again
         </button>

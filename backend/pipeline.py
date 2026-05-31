@@ -131,7 +131,9 @@ def run_pipeline(video_path: str, sport_type: str, skill_level: str = "") -> dic
             weight_total += weight
 
     if weight_total > 0:
-        overall_score = max(0, min(100, round(weighted_sum / weight_total * 100)))
+        raw = weighted_sum / weight_total  # 0.0–1.0
+        curved = raw ** 0.7               # power curve pushes mid-range scores higher
+        overall_score = max(0, min(100, round(curved * 100)))
     else:
         overall_score = 0
 

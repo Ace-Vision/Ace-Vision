@@ -329,10 +329,7 @@ def _score_one_frame(frame_angles: dict, checkpoint_baselines: dict) -> dict:
             continue
         expert = checkpoint_baselines[joint]
         deviation_deg  = abs(angle - expert['mean'])
-        # Floor the std at 12° so single-video baselines (std=5) don't make
-        # severity hit 1.0 on trivially small deviations. Remove once proper
-        # multi-video baselines are in place.
-        effective_std  = max(expert['std'], 12.0)
+        effective_std  = max(expert['std'], 20.0)
         severity_score = min(deviation_deg / (2 * effective_std), 1.0)
         direction      = "too_high" if angle > expert['mean'] else "too_low"
         deviations[joint] = {

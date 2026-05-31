@@ -125,12 +125,16 @@ def me(current_user: db.User = Depends(get_current_user)):
     return current_user
 
 
-def _save_checkpoint_frames(session_id: str, overlay_path: str, checkpoints: dict):
+def _save_checkpoint_frames(session_id: str, overlay_path: str, checkpoints: dict, win_start: int = 0):
     cap = cv2.VideoCapture(overlay_path)
     for name, data in checkpoints.items():
         if not data:
             continue
-        cap.set(cv2.CAP_PROP_POS_FRAMES, data["frame"])
+        # Overlay is trimmed to the swing window, so offset frame index accordingly.
+        overlay_frame = data["frame"] - win_start
+        if overlay_frame < 0:
+            continue
+        cap.set(cv2.CAP_PROP_POS_FRAMES, overlay_frame)
         ret, frame = cap.read()
         if ret:
             cv2.imwrite(os.path.join("uploads", f"{session_id}_frame_{name}.jpg"), frame)
@@ -206,9 +210,11 @@ async def analyse(
 
     os.unlink(tmp_path)
 
+    swing_window = result["deviation_scores"].get("swing_window", [0, 0])
     await asyncio.to_thread(
         _save_checkpoint_frames, result["session_id"], actual_video_path,
         result["deviation_scores"].get("checkpoints", {}),
+        swing_window[0],
     )
 
     sqlite_db.add(db.AnalysisSession(
