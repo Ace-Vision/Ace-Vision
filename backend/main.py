@@ -26,36 +26,32 @@ from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
-import bcrypt as _bcrypt
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from backend.schemas import (
-    AnalyseResponse, MatchAnalyseResponse, UserCreate, UserRead, SessionRead,
-    UserRegister, UserLogin, TokenResponse,
+    AnalyseResponse, MatchAnalyseResponse, SessionRead,
 )
 from backend import pipeline, vlm, db, court_tracker, score_recognizer
 from ml import renderer
 
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = os.getenv("SECRET_KEY", "ace-vision-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
-
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 gemini = vlm.gemini_model(API_KEY)
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Ace Vision API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 _progress: dict[str, dict] = {}
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -79,34 +75,6 @@ def shutdown_event():
     vector_db.save_vlm_vector_db()
 
 
-def hash_password(password: str) -> str:
-    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return _bcrypt.checkpw(plain.encode(), hashed.encode())
-
-def create_access_token(data: dict) -> str:
-    payload = data.copy()
-    payload["exp"] = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_current_user(token: str = Depends(oauth2_scheme), sqlite_db: Session = Depends(db.get_db)):
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        sub = payload.get("sub")
-        if sub is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        user_id = int(sub)
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    user = sqlite_db.query(db.User).filter(db.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
 
 
 async def _save_upload(file: UploadFile) -> tuple[str, int]:
@@ -128,29 +96,6 @@ async def _save_upload(file: UploadFile) -> tuple[str, int]:
         return tmp.name, bytes_written
 
 
-@app.post("/auth/register", response_model=TokenResponse)
-def register(body: UserRegister, sqlite_db: Session = Depends(db.get_db)):
-    if sqlite_db.query(db.User).filter(db.User.email == body.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user = db.User(
-        name=body.name, email=body.email,
-        hashed_password=hash_password(body.password), skill_level=body.skill_level,
-    )
-    sqlite_db.add(user); sqlite_db.commit(); sqlite_db.refresh(user)
-    token = create_access_token({"sub": str(user.id)})
-    return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
-
-@app.post("/auth/login", response_model=TokenResponse)
-def login(body: UserLogin, sqlite_db: Session = Depends(db.get_db)):
-    user = sqlite_db.query(db.User).filter(db.User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token({"sub": str(user.id)})
-    return TokenResponse(access_token=token, user_id=user.id, name=user.name, email=user.email)
-
-@app.get("/auth/me", response_model=UserRead)
-def me(current_user: db.User = Depends(get_current_user)):
-    return current_user
 
 
 def _save_checkpoint_frames(session_id: str, overlay_path: str, checkpoints: dict):
@@ -194,7 +139,9 @@ async def get_frame(session_id: str, checkpoint: str):
 
 
 @app.post("/analyse", response_model=AnalyseResponse)
+@limiter.limit("10/minute")
 async def analyse(
+    request: Request,
     file: UploadFile = File(...),
     sport_type: str = Form(...),
     skill_level: str = Form(...),
@@ -655,7 +602,7 @@ async def recognise_scores(
 
 
 @app.post("/match_sessions", status_code=201)
-def save_match_session(body: dict, current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+def save_match_session(body: dict, sqlite_db: Session = Depends(db.get_db)):
     session_id = body.get("session_id")
     if not session_id:
         raise HTTPException(status_code=422, detail="session_id required")
@@ -670,7 +617,7 @@ def save_match_session(body: dict, current_user: db.User = Depends(get_current_u
 
     sqlite_db.add(db.MatchSession(
         id=session_id,
-        user_id=current_user.id,
+        user_id=body.get("user_id"),
         sport_type=body.get("sport_type", "badminton"),
         opponent_name=body.get("opponent_name") or None,
         match_comment=body.get("match_comment") or None,
@@ -717,18 +664,16 @@ def get_match_session(session_id: str, sqlite_db: Session = Depends(db.get_db)):
 
 
 @app.get("/improvement_stat")
-def get_improvement_stat(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+def get_improvement_stat(user_id: Optional[int] = None, sqlite_db: Session = Depends(db.get_db)):
     import json as _json
     from collections import defaultdict
 
     VALID_TAGS = {"net_error", "out_long", "swing_miss", "bad_footwork", "late_reaction", "weak_return", "serve_fault", "forced_error"}
 
-    sessions = (
-        sqlite_db.query(db.MatchSession)
-        .filter(db.MatchSession.user_id == current_user.id)
-        .order_by(db.MatchSession.created_at)  # oldest first
-        .all()
-    )
+    query = sqlite_db.query(db.MatchSession).order_by(db.MatchSession.created_at)
+    if user_id is not None:
+        query = query.filter(db.MatchSession.user_id == user_id)
+    sessions = query.all()
 
     labeled = []
     for ms in sessions:
@@ -785,10 +730,12 @@ def get_improvement_stat(current_user: db.User = Depends(get_current_user), sqli
 
 
 @app.get("/users/me/match_history")
-def get_my_match_history(current_user: db.User = Depends(get_current_user), sqlite_db: Session = Depends(db.get_db)):
+def get_my_match_history(user_id: Optional[int] = None, sqlite_db: Session = Depends(db.get_db)):
+    query = sqlite_db.query(db.MatchSession)
+    if user_id is not None:
+        query = query.filter(db.MatchSession.user_id == user_id)
     sessions = (
-        sqlite_db.query(db.MatchSession)
-        .filter(db.MatchSession.user_id == current_user.id)
+        query
         .order_by(db.MatchSession.created_at.desc())
         .all()
     )
@@ -881,16 +828,6 @@ async def get_opponent_coaching(body: dict):
     return feedback
 
 
-@app.post("/users", response_model=UserRead)
-def create_user(user: UserCreate, sqlite_db: Session = Depends(db.get_db)):
-    db_user = db.User(name=user.name, skill_level=user.skill_level)
-    sqlite_db.add(db_user); sqlite_db.commit(); sqlite_db.refresh(db_user)
-    return db_user
-
-@app.get("/users", response_model=List[UserRead])
-def list_users(sqlite_db: Session = Depends(db.get_db)):
-    return sqlite_db.query(db.User).all()
-
 @app.get("/users/{user_id}/history", response_model=List[SessionRead])
 def get_user_history(user_id: int, sqlite_db: Session = Depends(db.get_db)):
     return sqlite_db.query(db.AnalysisSession).filter(db.AnalysisSession.user_id == user_id).all()
@@ -938,7 +875,6 @@ def get_user_progress_chart(
     user_id: int,
     sport: Optional[str] = None,
     sqlite_db: Session = Depends(db.get_db),
-    current_user: db.User = Depends(get_current_user),
 ):
     """Return per-session overall scores ordered by date, for charting."""
     query = (
@@ -947,8 +883,6 @@ def get_user_progress_chart(
     )
     if sport:
         query = query.filter(db.AnalysisSession.sport_type == sport)
-    if current_user.id != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
     sessions = query.order_by(db.AnalysisSession.created_at).all()
     return [
         {

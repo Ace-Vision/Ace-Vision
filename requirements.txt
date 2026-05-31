@@ -29,9 +29,6 @@ mediapipe==0.10.33
 opencv-contrib-python==4.13.0.92
 numpy>=2.0.0
 scipy>=1.11.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-bcrypt==4.0.1
 python-dotenv>=1.0.0
 pydantic[email]>=2.0.0
 psycopg2-binary>=2.9.0
@@ -41,3 +38,4 @@ sounddevice==0.5.5
 streamlit>=1.35.0
 openai-whisper>=20231117
 qtfaststart>=1.4
+slowapi>=0.1.9
