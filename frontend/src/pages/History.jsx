@@ -94,14 +94,11 @@ function History() {
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
-    const token = localStorage.getItem('token');
     if (!user.id) { setLoading(false); return; }
 
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-
     Promise.all([
-      fetch(`${API_BASE}/users/${user.id}/history`, { headers }).then(r => r.json()),
-      fetch(`${API_BASE}/users/${user.id}/progress/chart`, { headers }).then(r => r.json()),
+      fetch(`${API_BASE}/users/${user.id}/history`).then(r => r.json()),
+      fetch(`${API_BASE}/users/${user.id}/progress/chart`).then(r => r.json()),
     ])
       .then(([history, chart]) => {
         setSessions(Array.isArray(history) ? history : []);
