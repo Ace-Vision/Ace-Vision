@@ -38,7 +38,7 @@ from slowapi.errors import RateLimitExceeded
 from backend.schemas import (
     AnalyseResponse, MatchAnalyseResponse, SessionRead,
 )
-from backend import pipeline, vlm, db, court_tracker, score_recognizer
+from backend import pipeline, vlm, db, court_tracker, score_recognizer, vector_db
 from ml import renderer
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 _progress: dict[str, dict] = {}
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+_FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
+
 if os.path.isdir(_FRONTEND_BUILD):
     app.mount("/static", StaticFiles(directory=os.path.join(_FRONTEND_BUILD, "static")), name="static")
 
@@ -62,6 +64,39 @@ if os.path.isdir(_FRONTEND_BUILD):
 @app.get("/progress/{job_id}")
 async def get_progress(job_id: str):
     return _progress.get(job_id, {"pct": 0, "step": "Queued…", "done": False})
+
+
+def backfill_vector_db() -> None:
+    """Index any AnalysisSession rows not yet present in the vector DB."""
+    vdb = vector_db.get_vlm_vector_db()
+    sqlite_db = db.SessionLocal()
+    try:
+        sessions = (
+            sqlite_db.query(db.AnalysisSession)
+            .filter(db.AnalysisSession.coaching_feedback.isnot(None))
+            .all()
+        )
+        new_entries = 0
+        for session in sessions:
+            if session.id in vdb._indexed_session_ids:
+                continue
+            coaching = session.coaching_feedback
+            coaching_text = coaching.get("advice", str(coaching)) if isinstance(coaching, dict) else str(coaching)
+            joint_scores = {dev.joint_name: dev.severity_score for dev in session.deviations}
+            joint_scores["overall"] = float(session.overall_score)
+            vdb.add_vlm_output(
+                vlm_feedback=coaching_text,
+                scores=joint_scores,
+                session_id=session.id,
+                sport=session.sport_type,
+                user_id=session.user_id,
+            )
+            new_entries += 1
+        if new_entries:
+            vector_db.save_vlm_vector_db()
+            print(f"Vector DB: backfilled {new_entries} session(s).")
+    finally:
+        sqlite_db.close()
 
 
 @app.on_event("startup")
