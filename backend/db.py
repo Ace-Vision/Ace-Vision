@@ -10,6 +10,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ace_vision.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+def _utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
